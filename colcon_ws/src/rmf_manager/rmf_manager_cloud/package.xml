@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rmf_manager_cloud</name>
+  <version>0.1.0</version>
+  <description>Multi-robot cloud dashboard over Zenoh: Task Manager, Map Visualizer, Dashboard.</description>
+
+  <maintainer email="you@example.com">Alyona</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ROS Python, msgs, services your node touches -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+
+  <!-- Your custom interfaces -->
+  <exec_depend>rmf_manager_msgs</exec_depend>
+
+  <!-- Launch support -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <!-- Optional: tf helpers -->
+  <exec_depend>tf_transformations</exec_depend>
+
+  <!-- Python-web (install via pip at runtime; these entries help rosdep if available) -->
+  <exec_depend>python3-flask</exec_depend>
+  <exec_depend>python3-waitress</exec_depend>
+  <exec_depend>python3-geographiclib</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

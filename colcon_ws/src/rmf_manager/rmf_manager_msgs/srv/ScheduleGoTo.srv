@@ -1,0 +1,6 @@
+string goal
+bool start_now
+---
+string task_id
+bool accepted
+string message

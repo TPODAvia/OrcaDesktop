@@ -1,0 +1,406 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>RMF Visualizer (OSM)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+    <!-- Prefer local Leaflet if you vendor it; CDN fallback below -->
+    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'">
+    <script defer src="/static/vendor/leaflet/leaflet.js" onerror="this.onerror=null;this.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'"></script>
+
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { height:100%; }
+      body { margin:0; background:#0f1115; color:#e6edf3; font-family:system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+      #top {
+        padding:8px 12px; background:#161a22; display:flex; gap:12px; align-items:center; flex-wrap:wrap; border-bottom:1px solid #232a36;
+      }
+      .pill { padding:4px 8px; background:#222a36; border:1px solid #2f3744; border-radius:999px; }
+      .ctrl { display:inline-flex; align-items:center; gap:8px; padding:6px 8px; background:#1b2130; border:1px solid #2a3240; border-radius:10px; }
+      .ctrl input, .ctrl select { padding:6px 8px; background:#11151d; border:1px solid #2f3744; color:#e6edf3; border-radius:8px; }
+      .ctrl input[type="number"]{ width:90px; }
+      button { padding:6px 10px; border-radius:8px; background:#263143; color:#e6edf3; border:1px solid #39465a; cursor:pointer; }
+      button:hover { filter: brightness(1.1); }
+      button.primary { background:#1e4a2e; border-color:#2f6b45; }
+      button.danger { background:#5b1f22; border-color:#7a2b2f; }
+      #map {
+        width:100vw; height:calc(100vh - 88px);
+        /* Fallback grid so it's not black if Leaflet/tiles fail */
+        background:
+          linear-gradient(#0b0d12 0 0) padding-box,
+          repeating-linear-gradient(0deg, rgba(255,255,255,.045) 0 1px, transparent 1px 20px),
+          repeating-linear-gradient(90deg, rgba(255,255,255,.045) 0 1px, transparent 1px 20px);
+      }
+      .leaflet-container { background:#0b0d12; }
+      .label {
+        background:#0b0f18; color:#fff; border:1px solid #2a3240; border-radius:6px; padding:2px 6px;
+        font-weight:600; font-size:12px;
+      }
+      #offlineBanner { display:none; padding:8px 12px; background:#5b1f22; border-bottom:1px solid #7a2b2f; color:#fff; }
+      #hint { padding:6px 10px; opacity:.8; }
+    </style>
+  </head>
+  <body>
+    <div id="offlineBanner">Leaflet assets not loaded (offline or blocked). Showing fallback background only.</div>
+
+    <div id="top">
+      <span class="pill" id="info">loading…</span>
+
+      <span class="ctrl">
+        <label>Robot <select id="nsSelect"><option>(loading)</option></select></label>
+      </span>
+
+      <span class="ctrl">
+        <label>Loops <input id="loops" type="number" min="1" step="1" value="1"/></label>
+        <label><input id="placeTop" type="checkbox" checked/> Place on top</label>
+        <button id="publish" class="primary">Publish patrol</button>
+        <button id="clearSel" class="danger">Clear</button>
+      </span>
+
+      <span class="ctrl">
+        <label>Origin lat <input id="geoLat" type="number" step="0.000001" value="0.0"></label>
+        <label>Origin lon <input id="geoLon" type="number" step="0.000001" value="0.0"></label>
+        <label>m/px <input id="geoMPP" type="number" step="0.001" value="0.05"></label>
+        <label>rot° <input id="geoROT" type="number" step="0.1" value="0"></label>
+        <label>offX m <input id="geoTX" type="number" step="0.1" value="0"></label>
+        <label>offY m <input id="geoTY" type="number" step="0.1" value="0"></label>
+        <button id="applyGeo">Apply</button>
+      </span>
+
+      <button id="refresh">↻ Refresh</button>
+      <span class="pill" id="selList">Selected: -</span>
+      <span id="hint" class="pill">Controls: drag, scroll, pinch, arrows/WASD to pan, +/- to zoom</span>
+    </div>
+
+    <div id="map" aria-label="Map with OSM background"></div>
+
+    <script>
+      // ---------- Defaults ----------
+      const DEFAULTS = { lat: 55.751244, lon: 37.618423, zoom: 17 };
+
+      // ---------- Helpers ----------
+      const R = 6378137;
+      function d2r(d){ return d * Math.PI/180; }
+      function r2d(r){ return r * 180/Math.PI; }
+      function getParam(name){ return new URLSearchParams(location.search).get(name); }
+
+      // Geo params stored locally
+      function loadGeo(){
+        const o = {
+          lat: parseFloat(localStorage.getItem('geo.lat') ?? '0') || 0,
+          lon: parseFloat(localStorage.getItem('geo.lon') ?? '0') || 0,
+          mpp: parseFloat(localStorage.getItem('geo.mpp') ?? '0.05') || 0.05,
+          rot: parseFloat(localStorage.getItem('geo.rot') ?? '0') || 0,
+          tx:  parseFloat(localStorage.getItem('geo.tx')  ?? '0') || 0,
+          ty:  parseFloat(localStorage.getItem('geo.ty')  ?? '0') || 0,
+        };
+        const qlat = parseFloat(getParam('lat')); if (!isNaN(qlat)) o.lat = qlat;
+        const qlon = parseFloat(getParam('lon')); if (!isNaN(qlon)) o.lon = qlon;
+        return o;
+      }
+      function saveGeo(o){
+        localStorage.setItem('geo.lat', String(o.lat));
+        localStorage.setItem('geo.lon', String(o.lon));
+        localStorage.setItem('geo.mpp', String(o.mpp));
+        localStorage.setItem('geo.rot', String(o.rot));
+        localStorage.setItem('geo.tx',  String(o.tx));
+        localStorage.setItem('geo.ty',  String(o.ty));
+      }
+
+      async function fetchOsmDefaults(){
+        try{
+          const res = await fetch('/api/osm_defaults', { cache:'no-store' });
+          if (res.ok){
+            const j = await res.json();
+            return {
+              lat: (typeof j.lat === 'number') ? j.lat : DEFAULTS.lat,
+              lon: (typeof j.lon === 'number') ? j.lon : DEFAULTS.lon,
+              zoom: (typeof j.zoom === 'number') ? j.zoom : DEFAULTS.zoom
+            };
+          }
+        }catch{}
+        return { ...DEFAULTS };
+      }
+
+      function pxToLatLon(xpx, ypx, G){
+        let xm = xpx * G.mpp, ym = ypx * G.mpp;
+        const c = Math.cos(d2r(G.rot)), s = Math.sin(d2r(G.rot));
+        const xr = xm * c - ym * s;
+        const yr = xm * s + ym * c;
+        const X = xr + G.tx;
+        const Y = yr + G.ty;
+        const lat = G.lat + r2d(Y / R);
+        const lon = G.lon + r2d(X / (R * Math.cos(d2r(G.lat))));
+        return [lat, lon];
+      }
+
+      function setInfoText(s){
+        const el = document.getElementById('info');
+        if (el && el.textContent !== s) el.textContent = s;
+      }
+      function setSelectedList(arr){
+        document.getElementById('selList').textContent = 'Selected: ' + (arr.join(' → ') || '-');
+      }
+
+      // ---------- App state ----------
+      let ACTIVE_NS = getParam('ns') || '';
+      const selected = new Set();
+      let selectedOrder = [];
+      let verts = []; let edges = []; let pathSeq = -1;
+
+      // ---------- Map ----------
+      let map;
+      let edgesLayer, vertsLayer, labelsLayer, pathLayer, robotLayer;
+
+      function initMap(centerLat, centerLon, zoom){
+        if (typeof L === 'undefined'){
+          document.getElementById('offlineBanner').style.display = 'block';
+          return;
+        }
+        map = L.map('map', {
+          zoomControl: true,
+          keyboard: true,
+          scrollWheelZoom: true,
+          dragging: true
+        }).setView([centerLat, centerLon], zoom);
+
+        L.tileLayer(
+          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          { maxZoom: 20, attribution: '&copy; OpenStreetMap contributors' }
+        ).addTo(map);
+
+        edgesLayer = L.layerGroup().addTo(map);
+        vertsLayer = L.layerGroup().addTo(map);
+        labelsLayer = L.layerGroup().addTo(map);
+        pathLayer  = L.layerGroup().addTo(map);
+        robotLayer = L.layerGroup().addTo(map);
+
+        map.whenReady(() => setTimeout(() => map.invalidateSize(), 250));
+        window.addEventListener('resize', () => map.invalidateSize());
+
+        // Keyboard pan/zoom (arrows/WASD, +/-)
+        window.addEventListener('keydown', (e) => {
+          if (!map) return;
+          const step = 80; // px
+          if (['ArrowUp','w','W'].includes(e.key)) { map.panBy([0, -step]); }
+          else if (['ArrowDown','s','S'].includes(e.key)) { map.panBy([0, step]); }
+          else if (['ArrowLeft','a','A'].includes(e.key)) { map.panBy([-step, 0]); }
+          else if (['ArrowRight','d','D'].includes(e.key)) { map.panBy([step, 0]); }
+          else if (e.key === '+' || e.key === '=') { map.zoomIn(); }
+          else if (e.key === '-' || e.key === '_') { map.zoomOut(); }
+        });
+      }
+
+      // ---------- UI wires ----------
+      async function populateNamespaces(){
+        try{
+          const res = await fetch('/api/robots', { cache:'no-store' });
+          const arr = await res.json();
+          const sel = document.getElementById('nsSelect');
+          sel.innerHTML = '';
+          if (Array.isArray(arr) && arr.length){
+            arr.forEach((r) => {
+              const opt = document.createElement('option');
+              opt.value = r.ns;
+              opt.textContent = r.ns + (r.pose ? ` (x:${(+r.pose.x).toFixed(2)}, y:${(+r.pose.y).toFixed(2)})` : '');
+              sel.appendChild(opt);
+            });
+            if (!ACTIVE_NS) ACTIVE_NS = arr[0].ns;
+            sel.value = ACTIVE_NS;
+          }else{
+            const opt = document.createElement('option'); opt.textContent = '(none)'; sel.appendChild(opt);
+          }
+        }catch{
+          const sel = document.getElementById('nsSelect');
+          sel.innerHTML = '<option>(error)</option>';
+        }
+      }
+      document.addEventListener('change', (e)=>{
+        if (e.target && e.target.id === 'nsSelect'){
+          ACTIVE_NS = e.target.value || '';
+          selected.clear(); selectedOrder = []; setSelectedList(selectedOrder);
+        }
+      });
+
+      function refreshGeoInputs(G){
+        document.getElementById('geoLat').value = G.lat;
+        document.getElementById('geoLon').value = G.lon;
+        document.getElementById('geoMPP').value = G.mpp;
+        document.getElementById('geoROT').value = G.rot;
+        document.getElementById('geoTX').value  = G.tx;
+        document.getElementById('geoTY').value  = G.ty;
+      }
+
+      document.getElementById('applyGeo').addEventListener('click', ()=>{
+        const G = {
+          lat: parseFloat(document.getElementById('geoLat').value) || DEFAULTS.lat,
+          lon: parseFloat(document.getElementById('geoLon').value) || DEFAULTS.lon,
+          mpp: parseFloat(document.getElementById('geoMPP').value) || 0.05,
+          rot: parseFloat(document.getElementById('geoROT').value) || 0,
+          tx:  parseFloat(document.getElementById('geoTX').value)  || 0,
+          ty:  parseFloat(document.getElementById('geoTY').value)  || 0,
+        };
+        saveGeo(G);
+        if (map) map.setView([G.lat, G.lon]);
+        drawGraph();
+      });
+
+      document.getElementById('publish').addEventListener('click', async ()=>{
+        if (!selectedOrder.length){ alert('Select at least one vertex'); return; }
+        const loops = parseInt(document.getElementById('loops').value, 10) || 1;
+        const position = document.getElementById('placeTop').checked ? 'top' : 'bottom';
+        try {
+          const res = await fetch('/api/schedule_patrol', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ waypoints: selectedOrder, loops, position }),
+            credentials: 'same-origin'
+          });
+          const ct = (res.headers.get('content-type') || '').toLowerCase();
+          const data = ct.includes('application/json') ? await res.json() : { ok:false, error: await res.text() };
+          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          alert(`Patrol scheduled ${data.task_id ? '('+data.task_id+')' : ''}`);
+        } catch(e){ alert('Failed to schedule patrol:\n' + e.message); }
+      });
+
+      document.getElementById('clearSel').addEventListener('click', ()=>{
+        selected.clear(); selectedOrder = []; setSelectedList(selectedOrder); drawVerts();
+      });
+
+      document.getElementById('refresh').addEventListener('click', ()=> init(true));
+
+      // ---------- Data fetch ----------
+      async function fetchGraph(){
+        const j = await (await fetch('/api/graph', { cache:'no-store' })).json();
+        verts = j.vertices || [];
+        edges = j.edges || [];
+      }
+      async function fetchStatus(){
+        const q = ACTIVE_NS ? ('?ns=' + encodeURIComponent(ACTIVE_NS)) : '';
+        return (await fetch('/api/status' + q, { cache:'no-store' })).json();
+      }
+      async function fetchPath(){
+        const q = ACTIVE_NS ? ('?ns=' + encodeURIComponent(ACTIVE_NS)) : '';
+        return (await fetch('/api/path' + q, { cache:'no-store' })).json();
+      }
+
+      // ---------- Drawing ----------
+      function drawGraph(){
+        if (!map || typeof L === 'undefined') return;
+        const G = loadGeo();
+        edgesLayer.clearLayers(); vertsLayer.clearLayers(); labelsLayer.clearLayers();
+
+        edges.forEach(e => {
+          const a = pxToLatLon(e.ax, e.ay, G);
+          const b = pxToLatLon(e.bx, e.by, G);
+          L.polyline([a,b], { weight:2, opacity:.6, color:'#78a6ff' }).addTo(edgesLayer);
+        });
+
+        drawVerts();
+      }
+
+      function drawVerts(){
+        if (!map || typeof L === 'undefined') return;
+        const G = loadGeo();
+        vertsLayer.clearLayers(); labelsLayer.clearLayers();
+
+        verts.forEach(v => {
+          const ll = pxToLatLon(v.x, v.y, G);
+          const dot = L.circleMarker(ll, { radius:4, color: selected.has(v.name) ? '#22c55e' : '#f59e0b', weight:2, fillOpacity:1 }).addTo(vertsLayer);
+          dot.on('click', () => {
+            if (selected.has(v.name)){ selected.delete(v.name); selectedOrder = selectedOrder.filter(n => n !== v.name); }
+            else { selected.add(v.name); selectedOrder.push(v.name); }
+            setSelectedList(selectedOrder);
+            drawVerts();
+          });
+
+          L.marker(ll, {
+            icon: L.divIcon({ className:'label', html: v.name, iconSize:[0,0] })
+          }).addTo(labelsLayer);
+        });
+      }
+
+      function drawPath(pathJ){
+        if (!map || typeof L === 'undefined') return;
+        if (!pathJ || !pathJ.path) return;
+        if (typeof pathJ.seq === 'number' && pathJ.seq === pathSeq) return;
+        pathSeq = pathJ.seq;
+
+        const G = loadGeo();
+        pathLayer.clearLayers();
+        const pts = pathJ.path.map(p => pxToLatLon(p.x, p.y, G));
+        if (pts.length){
+          L.polyline(pts, { weight:3, color:'#22c55e' }).addTo(pathLayer);
+        }
+      }
+
+      function drawRobot(status){
+        robotLayer.clearLayers();
+        if (!map || typeof L === 'undefined') return;
+        if (!status || !status.ok) { setInfoText(`[${ACTIVE_NS||'-'}] pose -`); return; }
+
+        const G = loadGeo();
+        const ll = pxToLatLon(status.x, status.y, G);
+        const yaw = status.yaw || 0;
+        const len = 1.0, w = 0.6;
+        const tipM = [Math.cos(yaw)*len, Math.sin(yaw)*len];
+        const leftM = [Math.cos(yaw+Math.PI*0.8)*w, Math.sin(yaw+Math.PI*0.8)*w];
+        const rightM= [Math.cos(yaw-Math.PI*0.8)*w, Math.sin(yaw-Math.PI*0.8)*w];
+
+        function mOffsetToLatLon(baseLL, offsetM){
+          const lat = baseLL[0] + r2d(offsetM[1] / R);
+          const lon = baseLL[1] + r2d(offsetM[0] / (R * Math.cos(d2r(baseLL[0]))));
+          return [lat, lon];
+        }
+
+        const p0 = ll;
+        const p1 = mOffsetToLatLon(ll, tipM);
+        const p2 = mOffsetToLatLon(ll, leftM);
+        const p3 = mOffsetToLatLon(ll, rightM);
+
+        L.polygon([p1,p2,p0,p3], { color:'#ef4444', weight:2, fillOpacity:0.9 }).addTo(robotLayer);
+        setInfoText(`[${ACTIVE_NS||'-'}] pose ok`);
+        if (!drawRobot._centered) { map.setView(ll, 19); drawRobot._centered = true; }
+      }
+
+      // ---------- Timer ----------
+      let timer = null;
+      function startTimer(){
+        if (timer) clearInterval(timer);
+        timer = setInterval(async ()=>{
+          try {
+            const [st, p] = await Promise.all([fetchStatus(), fetchPath()]);
+            drawPath(p);
+            drawRobot(st);
+          } catch {}
+        }, 1000);
+      }
+
+      // ---------- Init ----------
+      async function init(force=false){
+        const defs = await fetchOsmDefaults();
+        const G0 = loadGeo();
+        if (!G0.lat && !G0.lon){ G0.lat = defs.lat; G0.lon = defs.lon; saveGeo(G0); }
+        refreshGeoInputs(G0);
+
+        initMap(G0.lat || defs.lat, G0.lon || defs.lon, defs.zoom || DEFAULTS.zoom);
+
+        await populateNamespaces();
+        await fetchGraph();
+        drawGraph();
+        startTimer();
+        setSelectedList(selectedOrder);
+
+        // If Leaflet failed to load, warn operator
+        setTimeout(() => {
+          if (typeof L === 'undefined'){
+            document.getElementById('offlineBanner').style.display = 'block';
+            setInfoText('offline/map assets missing');
+          }
+        }, 800);
+      }
+      init();
+    </script>
+  </body>
+</html>

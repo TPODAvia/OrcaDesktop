@@ -1,0 +1,32 @@
+{
+  plugins: {
+    ros2dds: {
+      domain: 41,
+      namespace: "/vboxuser_Ubuntu22",
+      allow: {
+        publishers: [],
+        // subscribers: ["/rmf/state", "/chatter"],
+        subscribers: ["/rmf/state", "/rmf/event", "/gps/data" , "/imu/data_raw", "/map/2d_map", "/ip_cam/front/image_raw", "/tf", "/diagnostics"],
+        service_servers: [],
+        service_clients: [],
+        action_servers: [],
+        action_clients: []
+      }
+    }
+  },
+
+  // Zenoh related configurations
+  mode: "client",
+  connect: {
+    endpoints: ["tcp/192.168.196.162:5447"]
+  },
+  listen: {
+    endpoints: []
+  },
+  scouting: {
+    multicast: {
+      enabled: true,
+      address: "224.0.0.224:5446"
+    }
+  }
+}

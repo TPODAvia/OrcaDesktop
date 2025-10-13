@@ -1,0 +1,5 @@
+string task_id
+string stage     # "pickup" or "dropoff"
+---
+bool success
+string message

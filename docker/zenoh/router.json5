@@ -1,0 +1,16 @@
+{
+  mode: "router",
+
+  listen: {
+    endpoints: ["tcp/0.0.0.0:5447"]
+  },
+
+  // optional – change or disable multicast
+  // zenohd -c /etc/zenoh/zenohd-5447.json5
+  scouting: {
+    multicast: {
+      enabled: true,
+      address: "224.0.0.224:5446"
+    }
+  }
+}

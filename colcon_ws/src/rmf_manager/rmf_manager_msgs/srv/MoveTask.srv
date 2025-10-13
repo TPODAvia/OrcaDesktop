@@ -1,0 +1,6 @@
+string task_id
+string direction   # "up"|"down"|"top"|"bottom" or ""
+int32 new_index    # >=0 to set absolute index; ignored if <0 or direction is set
+---
+bool success
+string message

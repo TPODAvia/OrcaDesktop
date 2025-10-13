@@ -1,0 +1,247 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>RMF Task Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+      select[multiple]{height:140px}
+      table code{font-size:.9em}
+      button.danger{background:#b91c1c;color:#fff}
+      button[disabled], input[disabled]{opacity:.45; cursor:not-allowed; filter:grayscale(60%);}
+      .robots ul{list-style:none;padding:0;margin:0}
+      .robots li{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--table-border);padding:6px 0}
+      .robots code{font-size:.9em}
+      .robots .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+      .robots .row-right{display:flex;gap:8px;align-items:center}
+      .muted-sm{color:var(--muted); font-size:.9em}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>RMF Task Manager</h1>
+
+      <section class="grid">
+        <!-- Multi-robot panel (from Zenoh discovery cache) -->
+        <div class="card robots">
+          <h2>Robots (Zenoh)</h2>
+          <p class="muted-sm">Live snapshot across namespaces. <a id="openRobots" href="#">Open Robots Dashboard →</a></p>
+          <ul id="robots"></ul>
+          <div class="muted-sm" id="robotsInfo">loading…</div>
+        </div>
+
+        <div class="card">
+          <h2>Status</h2>
+          {% if data.current_task %}
+            <p><b>Active:</b> <span id="activeText">
+              {% if data.current_task %}{{ data.current_task.type }} ({{ data.current_task.id }}) — status: {{ data.current_task.status }}{% else %}none{% endif %}
+            </span></p>
+          {% else %}
+            <p><b>Active:</b> none</p>
+          {% endif %}
+          <p><b>Returning home:</b> {{ 'yes' if data.returning_home else 'no' }}</p>
+          <p><b>Docked:</b> {{ 'yes' if data.docked else 'no' }}</p>
+
+          <form method="post" action="/resume_after_charge">
+            <label>
+              <input type="checkbox" name="enabled" {% if data.resume_after_charge %}checked{% endif %}/>
+              Resume after charging
+            </label>
+            <button type="submit">Update</button>
+          </form>
+
+          <form method="post" action="/return_home" style="margin-top:8px">
+            <button type="submit" class="danger">Return Home Now</button>
+          </form>
+
+          <p style="margin-top:8px">
+            <a id="openViz" href="#" target="_blank">Open Map Visualizer →</a>
+          </p>
+        </div>
+
+        <!-- Schedule Patrol / Delivery / GoTo (unchanged) -->
+        <div class="card">
+          <h2>Schedule Patrol</h2>
+          <form method="post" action="/schedule/patrol">
+            <label>Waypoints (choose in order)
+              <select name="waypoints" multiple>
+                {% for v in vertices %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Loops: <input name="loops" type="number" value="1" min="1"/></label>
+            <label>Add at:
+              <select name="position">
+                <option value="bottom" selected>Bottom</option>
+                <option value="top">Top (next)</option>
+              </select>
+            </label>
+            <label><input type="checkbox" name="start_now" /> Start now (only if idle)</label>
+            <button type="submit">Add Patrol</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Schedule Delivery</h2>
+          <form method="post" action="/schedule/delivery">
+            <label>Pickup:
+              <select name="pickup">
+                {% for v in vertices %}<option value="{{ v }}" {% if v=='station' %}disabled{% endif %}>{{ v }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Dropoff:
+              <select name="dropoff">
+                {% for v in vertices %}<option value="{{ v }}" {% if v=='station' %}disabled{% endif %}>{{ v }}</option>{% endfor %}
+              </select>
+            </label>
+            <label><input type="checkbox" name="wait_for_trigger"/> Wait for trigger at stops</label>
+            <label>Add at:
+              <select name="position">
+                <option value="bottom" selected>Bottom</option>
+                <option value="top">Top (next)</option>
+              </select>
+            </label>
+            <button type="submit">Add Delivery</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Go To</h2>
+          <form method="post" action="/schedule/goto">
+            <label>Goal:
+              <select name="goal">
+                {% for v in vertices %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Add at:
+              <select name="position">
+                <option value="bottom" selected>Bottom</option>
+                <option value="top">Top (next)</option>
+              </select>
+            </label>
+            <label><input type="checkbox" name="start_now" /> Start now (only if idle)</label>
+            <button type="submit">Queue Go-To</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- Scheduled tasks (unchanged) -->
+      <section class="card" style="margin-top:16px">
+        <h2>Scheduled Tasks</h2>
+
+        {% set qlen = data.queue_len %}
+        {% set rows = data.scheduled_with_current if data.scheduled_with_current else [] %}
+
+        {% if rows and (rows|length) > 0 %}
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>ID</th><th>Type</th><th>Status</th><th>Details</th><th>Reorder</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="scheduledBody">
+              {% for t in rows %}
+                {% set is_current = (t.is_current if t.is_current is defined else False) %}
+                {% set pos = (t.position if t.position is defined else loop.index0) %}
+                <tr {% if is_current %}style="background:#fff7ed"{% endif %}>
+                  <td>{% if is_current %}▶{% else %}{{ pos + 1 }}{% endif %}</td>
+                  <td><code>{{ t.id }}</code></td>
+                  <td>{{ t.type }}{% if is_current %}<span style="margin-left:6px;padding:1px 6px;border:1px solid #999;border-radius:10px;font-size:.8em;">active</span>{% endif %}</td>
+                  <td>{{ t.status }}</td>
+                  <td>
+                    {% if t.type == 'patrol' %} {{ t.waypoints }} × {{ t.loops }} {% endif %}
+                    {% if t.type == 'delivery' %} pickup: {{ t.pickup }}, drop: {{ t.dropoff }}, wait: {{ t.wait_for_trigger }} {% endif %}
+                    {% if t.type == 'goto' %} goal: {{ t.waypoints[0] if t.waypoints }} {% endif %}
+                  </td>
+                  <td>
+                    <form method="post" action="/move/{{ t.id }}/top" style="display:inline"><button type="submit" {% if is_current or pos == 0 %}disabled{% endif %} title="Top">⟰</button></form>
+                    <form method="post" action="/move/{{ t.id }}/up" style="display:inline"><button type="submit" {% if is_current or pos == 0 %}disabled{% endif %} title="Up">↑</button></form>
+                    <form method="post" action="/move/{{ t.id }}/down" style="display:inline"><button type="submit" {% if is_current or pos == qlen-1 %}disabled{% endif %} title="Down">↓</button></form>
+                    <form method="post" action="/move/{{ t.id }}/bottom" style="display:inline"><button type="submit" {% if is_current or pos == qlen-1 %}disabled{% endif %} title="Bottom">⟱</button></form>
+                    <form method="post" action="/reorder/{{ t.id }}" style="display:inline;margin-left:6px">
+                      <input type="number" name="index" min="0" max="{{ qlen-1 }}" value="{{ 0 if is_current else pos }}" style="width:4em" {% if is_current %}disabled{% endif %}>
+                      <button type="submit" {% if is_current %}disabled{% endif %}>Set</button>
+                    </form>
+                  </td>
+                  <td>
+                    <form method="post" action="/cancel/{{ t.id }}" style="display:inline" onsubmit="return confirm('Cancel task {{ t.id }}?');"><button type="submit" class="danger">Cancel</button></form>
+                    {% if t.type == 'delivery' and t.wait_for_trigger and not is_current %}
+                      <form method="post" action="/trigger/{{ t.id }}/pickup" style="display:inline"><button type="submit">Trigger Pickup</button></form>
+                      <form method="post" action="/trigger/{{ t.id }}/dropoff" style="display:inline"><button type="submit">Trigger Dropoff</button></form>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+          <form method="post" action="/cancel_all" style="margin-top:8px" onsubmit="return confirm('Cancel ALL scheduled tasks?');">
+            <button type="submit" class="danger">Cancel All</button>
+          </form>
+        {% else %}
+          <p>No scheduled tasks.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <script>
+      // build “Open Visualizer” and “Open Robots Dashboard” links
+      function updateLinks(ns){
+        const host = window.location.hostname;
+        document.getElementById('openViz').href = `http://${host}:8080/?ns=${encodeURIComponent(ns || '')}`;
+        document.getElementById('openRobots').href = `http://${host}:5005/robots`; // served by dashboard app
+      }
+
+      async function refreshRobots(){
+        try{
+          const res = await fetch('/api/robots', { cache:'no-store' });
+          const arr = await res.json();
+          const ul = document.getElementById('robots');
+          const info = document.getElementById('robotsInfo');
+          ul.innerHTML = '';
+
+          if (!Array.isArray(arr) || arr.length === 0){
+            info.textContent = 'No robots discovered yet.';
+            updateLinks('');
+            return;
+          }
+
+          info.textContent = `${arr.length} namespaces`;
+          arr.forEach((r, idx) => {
+            const li = document.createElement('li');
+
+            const left = document.createElement('div');
+            left.className = 'row';
+            const code = document.createElement('code');
+            code.textContent = r.ns;
+            const pose = document.createElement('span');
+            pose.textContent = r.pose ? `x:${(+r.pose.x).toFixed(2)} y:${(+r.pose.y).toFixed(2)}` : 'pose: —';
+            const badge = document.createElement('span');
+            const isOk = r.age !== null && r.age < 3.0;
+            badge.textContent = isOk ? 'live' : 'stale';
+            badge.className = 'badge ' + (isOk ? 'ok' : 'stale');
+            left.append(code, pose, badge);
+
+            const right = document.createElement('div');
+            right.className = 'row';
+            const btnViz = document.createElement('a');
+            btnViz.textContent = 'Visualizer →'; btnViz.target = '_blank';
+            btnViz.href = document.getElementById('openViz').href.replace(/ns=[^&]*/,'ns='+encodeURIComponent(r.ns));
+            right.appendChild(btnViz);
+
+            li.append(left, right);
+            ul.appendChild(li);
+
+            if (idx === 0) updateLinks(r.ns);
+          });
+        }catch{
+          document.getElementById('robotsInfo').textContent = 'Failed to fetch robots.';
+          updateLinks('');
+        }
+      }
+
+      updateLinks('');
+      refreshRobots();
+      setInterval(refreshRobots, 2000);
+    </script>
+  </body>
+</html>

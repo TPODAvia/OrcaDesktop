@@ -1,0 +1,7 @@
+string pickup
+string dropoff
+bool wait_for_trigger
+---
+string task_id
+bool accepted
+string message

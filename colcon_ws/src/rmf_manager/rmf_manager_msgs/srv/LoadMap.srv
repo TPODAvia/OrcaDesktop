@@ -1,0 +1,10 @@
+# Request a specific map by place (folder name) and floor index.
+string place       # e.g., "office", "park", "hospital", "town"
+int32 floor_index  # e.g., 0, 1, 2...
+
+# Optional immediate seeding from odometry (to avoid waiting for GPS/initialpose)
+bool use_seed_odom
+nav_msgs/Odometry seed_odom
+---
+bool success
+string message
