@@ -1,406 +1,472 @@
 <!doctype html>
 <html>
   <head>
-    <meta charset="utf-8"/>
-    <title>RMF Visualizer (OSM)</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta charset="utf-8" />
+    <title>RMF — Multi-Robot Global View</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Prefer local Leaflet if you vendor it; CDN fallback below -->
-    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'">
-    <script defer src="/static/vendor/leaflet/leaflet.js" onerror="this.onerror=null;this.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'"></script>
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous" defer></script>
 
     <style>
       :root { color-scheme: dark; }
-      * { box-sizing: border-box; }
-      html, body { height:100%; }
-      body { margin:0; background:#0f1115; color:#e6edf3; font-family:system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+      html, body { height:100%; margin:0; }
+      body { background:#0f1115; color:#e6edf3; font:14px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+
+      /* Top bar */
       #top {
-        padding:8px 12px; background:#161a22; display:flex; gap:12px; align-items:center; flex-wrap:wrap; border-bottom:1px solid #232a36;
+        display:flex; gap:12px; align-items:center; padding:8px 12px;
+        background:#161a22; border-bottom:1px solid #232a36; position:sticky; top:0; z-index:10;
       }
-      .pill { padding:4px 8px; background:#222a36; border:1px solid #2f3744; border-radius:999px; }
-      .ctrl { display:inline-flex; align-items:center; gap:8px; padding:6px 8px; background:#1b2130; border:1px solid #2a3240; border-radius:10px; }
-      .ctrl input, .ctrl select { padding:6px 8px; background:#11151d; border:1px solid #2f3744; color:#e6edf3; border-radius:8px; }
-      .ctrl input[type="number"]{ width:90px; }
-      button { padding:6px 10px; border-radius:8px; background:#263143; color:#e6edf3; border:1px solid #39465a; cursor:pointer; }
-      button:hover { filter: brightness(1.1); }
-      button.primary { background:#1e4a2e; border-color:#2f6b45; }
-      button.danger { background:#5b1f22; border-color:#7a2b2f; }
-      #map {
-        width:100vw; height:calc(100vh - 88px);
-        /* Fallback grid so it's not black if Leaflet/tiles fail */
-        background:
-          linear-gradient(#0b0d12 0 0) padding-box,
-          repeating-linear-gradient(0deg, rgba(255,255,255,.045) 0 1px, transparent 1px 20px),
-          repeating-linear-gradient(90deg, rgba(255,255,255,.045) 0 1px, transparent 1px 20px);
+      .pill { padding:4px 8px; background:#222a36; border:1px solid #2f3744; border-radius:999px; white-space:nowrap; }
+      .legend { display:flex; gap:10px; align-items:center; }
+      .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+      .ok { background:#22c55e; } .stale { background:#a3a3a3; } .no { background:#ef4444; }
+
+      /* Map */
+      #map { width:100%; height: calc(100% - 72px); }
+
+      /* Robot tooltip */
+      .robot-label {
+        background: rgba(17,22,31,.9); color:#e6edf3; border:1px solid #2a3240; padding:2px 6px; border-radius:6px; font-weight:600;
       }
-      .leaflet-container { background:#0b0d12; }
-      .label {
-        background:#0b0f18; color:#fff; border:1px solid #2a3240; border-radius:6px; padding:2px 6px;
-        font-weight:600; font-size:12px;
+      .leaflet-tooltip.robot-label { box-shadow:none; }
+
+      /* Vertex label (match original feel) */
+      .leaflet-tooltip.v-label {
+        background: rgba(0,0,0,.58);
+        color:#f8fafc; border:1px solid #2a3240; border-radius:6px;
+        font-weight:600; padding:2px 6px;
       }
-      #offlineBanner { display:none; padding:8px 12px; background:#5b1f22; border-bottom:1px solid #7a2b2f; color:#fff; }
-      #hint { padding:6px 10px; opacity:.8; }
+
+      /* Bottom bar */
+      #bar {
+        position:fixed; left:8px; bottom:8px; z-index:9999; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+        background:#11161f; border:1px solid #2a3240; padding:6px 8px; border-radius:8px; font-size:12px;
+      }
+      #opacity { width:120px; }
+      button, select {
+        padding:6px 10px; border-radius:8px; background:#263143; color:#e6edf3; border:1px solid #39465a; cursor:pointer;
+      }
+      button:hover { filter:brightness(1.1); }
+      .badge { padding:2px 6px; background:#22314a; border:1px solid #2d3b52; border-radius:8px; }
+
+      /* Popup menu for vertex (patrol only) */
+      .menu {
+        position:absolute; z-index:99999; min-width:180px; background:#11161f; color:#e6edf3;
+        border:1px solid #2a3240; border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,.45);
+        padding:8px; display:none;
+      }
+      .menu .row { display:flex; gap:8px; flex-wrap:wrap; }
+      .menu button { flex:1; }
+
+      /* Toast */
+      #toast {
+        position: fixed; left: 50%; transform: translateX(-50%);
+        bottom: 18px; background:#1b2130; color:#e6edf3; border:1px solid #2a3240;
+        padding:10px 14px; border-radius:10px; display:none; z-index:99999;
+      }
     </style>
   </head>
   <body>
-    <div id="offlineBanner">Leaflet assets not loaded (offline or blocked). Showing fallback background only.</div>
-
     <div id="top">
-      <span class="pill" id="info">loading…</span>
-
-      <span class="ctrl">
-        <label>Robot <select id="nsSelect"><option>(loading)</option></select></label>
-      </span>
-
-      <span class="ctrl">
-        <label>Loops <input id="loops" type="number" min="1" step="1" value="1"/></label>
-        <label><input id="placeTop" type="checkbox" checked/> Place on top</label>
-        <button id="publish" class="primary">Publish patrol</button>
-        <button id="clearSel" class="danger">Clear</button>
-      </span>
-
-      <span class="ctrl">
-        <label>Origin lat <input id="geoLat" type="number" step="0.000001" value="0.0"></label>
-        <label>Origin lon <input id="geoLon" type="number" step="0.000001" value="0.0"></label>
-        <label>m/px <input id="geoMPP" type="number" step="0.001" value="0.05"></label>
-        <label>rot° <input id="geoROT" type="number" step="0.1" value="0"></label>
-        <label>offX m <input id="geoTX" type="number" step="0.1" value="0"></label>
-        <label>offY m <input id="geoTY" type="number" step="0.1" value="0"></label>
-        <button id="applyGeo">Apply</button>
-      </span>
-
-      <button id="refresh">↻ Refresh</button>
+      <span class="pill" id="status">loading…</span>
+      <span class="pill">zoom: wheel • pan: drag</span>
+      <span class="legend"><span class="dot ok"></span> fix <span class="dot stale"></span> stale <span class="dot no"></span> no fix</span>
+      <span class="pill" id="count">0 robots</span>
+      <span class="pill" id="mapsInfo">maps: -</span>
+      <span class="pill" id="overlayInfo">overlay: -</span>
       <span class="pill" id="selList">Selected: -</span>
-      <span id="hint" class="pill">Controls: drag, scroll, pinch, arrows/WASD to pan, +/- to zoom</span>
     </div>
 
-    <div id="map" aria-label="Map with OSM background"></div>
+    <div id="map" aria-label="OpenStreetMap with robots and overlays"></div>
+
+    <div id="bar">
+      <label>ns <select id="nsSelect"></select></label>
+      <button id="btnPublishPatrol" type="button">Publish patrol</button>
+      <button id="btnClearSel" type="button">Clear</button>
+      <button id="btnCancelAll" type="button">Cancel all</button>
+      <button id="btnReturnHome" type="button">Return home</button>
+      <span class="badge">overlay α</span>
+      <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.5"/>
+      <button id="btnCenterMap" type="button">Center</button>
+    </div>
+
+    <div id="toast"></div>
+
+    <!-- Patrol-only vertex menu -->
+    <div id="vmenu" class="menu" role="dialog" aria-modal="false">
+      <div class="title" id="vmenuTitle" style="font-weight:700; margin-bottom:6px;">Vertex</div>
+      <div class="row">
+        <button id="actAddToPatrol">Add to patrol</button>
+        <button id="actRemoveFromPatrol">Remove from patrol</button>
+      </div>
+    </div>
 
     <script>
-      // ---------- Defaults ----------
-      const DEFAULTS = { lat: 55.751244, lon: 37.618423, zoom: 17 };
+      const DEBUG = true;
+      function log(...a){ if(DEBUG) console.log('[UI]', ...a); }
+      function warn(...a){ if(DEBUG) console.warn('[UI]', ...a); }
+      function err(...a){ console.error('[UI]', ...a); }
+      function setStatus(s){ const el=document.getElementById('status'); if(el) el.textContent=s; }
+      function showToast(msg, ms=1600){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(showToast._t); showToast._t=setTimeout(()=>t.style.display='none', ms); }
 
-      // ---------- Helpers ----------
-      const R = 6378137;
-      function d2r(d){ return d * Math.PI/180; }
-      function r2d(r){ return r * 180/Math.PI; }
-      function getParam(name){ return new URLSearchParams(location.search).get(name); }
+      let map, tiles;
 
-      // Geo params stored locally
-      function loadGeo(){
-        const o = {
-          lat: parseFloat(localStorage.getItem('geo.lat') ?? '0') || 0,
-          lon: parseFloat(localStorage.getItem('geo.lon') ?? '0') || 0,
-          mpp: parseFloat(localStorage.getItem('geo.mpp') ?? '0.05') || 0.05,
-          rot: parseFloat(localStorage.getItem('geo.rot') ?? '0') || 0,
-          tx:  parseFloat(localStorage.getItem('geo.tx')  ?? '0') || 0,
-          ty:  parseFloat(localStorage.getItem('geo.ty')  ?? '0') || 0,
-        };
-        const qlat = parseFloat(getParam('lat')); if (!isNaN(qlat)) o.lat = qlat;
-        const qlon = parseFloat(getParam('lon')); if (!isNaN(qlon)) o.lon = qlon;
-        return o;
-      }
-      function saveGeo(o){
-        localStorage.setItem('geo.lat', String(o.lat));
-        localStorage.setItem('geo.lon', String(o.lon));
-        localStorage.setItem('geo.mpp', String(o.mpp));
-        localStorage.setItem('geo.rot', String(o.rot));
-        localStorage.setItem('geo.tx',  String(o.tx));
-        localStorage.setItem('geo.ty',  String(o.ty));
-      }
+      // robots
+      const markers = new Map();
 
-      async function fetchOsmDefaults(){
-        try{
-          const res = await fetch('/api/osm_defaults', { cache:'no-store' });
-          if (res.ok){
-            const j = await res.json();
-            return {
-              lat: (typeof j.lat === 'number') ? j.lat : DEFAULTS.lat,
-              lon: (typeof j.lon === 'number') ? j.lon : DEFAULTS.lon,
-              zoom: (typeof j.zoom === 'number') ? j.zoom : DEFAULTS.zoom
-            };
-          }
-        }catch{}
-        return { ...DEFAULTS };
-      }
+      // overlays per (ns|map|floor)
+      const overlayGroups = new Map(); // key -> {img, verts, edges, path}
+      let overlayAlpha = 0.5;
 
-      function pxToLatLon(xpx, ypx, G){
-        let xm = xpx * G.mpp, ym = ypx * G.mpp;
-        const c = Math.cos(d2r(G.rot)), s = Math.sin(d2r(G.rot));
-        const xr = xm * c - ym * s;
-        const yr = xm * s + ym * c;
-        const X = xr + G.tx;
-        const Y = yr + G.ty;
-        const lat = G.lat + r2d(Y / R);
-        const lon = G.lon + r2d(X / (R * Math.cos(d2r(G.lat))));
-        return [lat, lon];
-      }
+      // degraded caches
+      let lastGoodRobots = { robots: [], t: 0 };
+      let lastGoodMaps   = { maps: [],   t: 0 };
 
-      function setInfoText(s){
-        const el = document.getElementById('info');
-        if (el && el.textContent !== s) el.textContent = s;
-      }
-      function setSelectedList(arr){
-        document.getElementById('selList').textContent = 'Selected: ' + (arr.join(' → ') || '-');
-      }
+      let firstMapCenter = true;
+      let lastMapsPayload = null;
 
-      // ---------- App state ----------
-      let ACTIVE_NS = getParam('ns') || '';
+      // ns + patrol selection
+      let activeNs = '/';
       const selected = new Set();
       let selectedOrder = [];
-      let verts = []; let edges = []; let pathSeq = -1;
+      const nameToVertexMarker = new Map();
 
-      // ---------- Map ----------
-      let map;
-      let edgesLayer, vertsLayer, labelsLayer, pathLayer, robotLayer;
+      // path cache
+      const pathLayers = new Map(); // ns -> L.Polyline
+      const lastPathSeq = new Map();
 
-      function initMap(centerLat, centerLon, zoom){
-        if (typeof L === 'undefined'){
-          document.getElementById('offlineBanner').style.display = 'block';
-          return;
-        }
+      // vertex popup state
+      const vmenu = document.getElementById('vmenu');
+      const vmenuTitle = document.getElementById('vmenuTitle');
+      let vmenuFor = null; // {ns, name, lat, lon}
+
+      function createMap(){
+        if(!window.L){ err('Leaflet missing'); return; }
         map = L.map('map', {
-          zoomControl: true,
-          keyboard: true,
-          scrollWheelZoom: true,
-          dragging: true
-        }).setView([centerLat, centerLon], zoom);
+          zoomControl: true, attributionControl: true,
+          wheelPxPerZoomLevel: 80
+        }).setView([0,0], 2);
 
-        L.tileLayer(
-          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          { maxZoom: 20, attribution: '&copy; OpenStreetMap contributors' }
-        ).addTo(map);
-
-        edgesLayer = L.layerGroup().addTo(map);
-        vertsLayer = L.layerGroup().addTo(map);
-        labelsLayer = L.layerGroup().addTo(map);
-        pathLayer  = L.layerGroup().addTo(map);
-        robotLayer = L.layerGroup().addTo(map);
-
-        map.whenReady(() => setTimeout(() => map.invalidateSize(), 250));
-        window.addEventListener('resize', () => map.invalidateSize());
-
-        // Keyboard pan/zoom (arrows/WASD, +/-)
-        window.addEventListener('keydown', (e) => {
-          if (!map) return;
-          const step = 80; // px
-          if (['ArrowUp','w','W'].includes(e.key)) { map.panBy([0, -step]); }
-          else if (['ArrowDown','s','S'].includes(e.key)) { map.panBy([0, step]); }
-          else if (['ArrowLeft','a','A'].includes(e.key)) { map.panBy([-step, 0]); }
-          else if (['ArrowRight','d','D'].includes(e.key)) { map.panBy([step, 0]); }
-          else if (e.key === '+' || e.key === '=') { map.zoomIn(); }
-          else if (e.key === '-' || e.key === '_') { map.zoomOut(); }
-        });
+        tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 24, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
       }
 
-      // ---------- UI wires ----------
-      async function populateNamespaces(){
-        try{
-          const res = await fetch('/api/robots', { cache:'no-store' });
-          const arr = await res.json();
-          const sel = document.getElementById('nsSelect');
-          sel.innerHTML = '';
-          if (Array.isArray(arr) && arr.length){
-            arr.forEach((r) => {
-              const opt = document.createElement('option');
-              opt.value = r.ns;
-              opt.textContent = r.ns + (r.pose ? ` (x:${(+r.pose.x).toFixed(2)}, y:${(+r.pose.y).toFixed(2)})` : '');
-              sel.appendChild(opt);
-            });
-            if (!ACTIVE_NS) ACTIVE_NS = arr[0].ns;
-            sel.value = ACTIVE_NS;
+      function makeRobotIcon(color='#ef4444', rotateDeg=0, muted=false){
+        const svg = `<svg viewBox="0 0 24 24" width="24" height="24" fill="${color}" stroke="#0b0f18" stroke-width="1.2"><polygon points="12,2 22,22 12,17 2,22"/></svg>`;
+        const div = document.createElement('div');
+        div.className = 'robot-icon' + (muted ? ' muted' : '');
+        div.innerHTML = svg;
+        div.style.transform = `rotate(${rotateDeg}deg)`;
+        return L.divIcon({ html: div, className:'', iconSize:[24,24], iconAnchor:[12,12] });
+      }
+
+      function overlayKey(m){
+        const ns = m.ns || '/';
+        return `${ns}|${m.map_name || ''}|${m.floor_name || ''}`;
+      }
+
+      function getOverlayGroup(key){
+        let g = overlayGroups.get(key);
+        if(!g){
+          g = { img:null, verts: L.layerGroup().addTo(map), edges: L.layerGroup().addTo(map), path: null };
+          overlayGroups.set(key, g);
+        }
+        return g;
+      }
+
+      function clearOverlayGroup(g){
+        if(g.img){ try{ map.removeLayer(g.img); }catch{} g.img = null; }
+        try{ g.verts.clearLayers(); }catch{}
+        try{ g.edges.clearLayers(); }catch{}
+        if(g.path){ try{ map.removeLayer(g.path); }catch{} g.path = null; }
+      }
+
+      function applyOverlayAlpha(){
+        for(const g of overlayGroups.values()){
+          if(g.img && typeof g.img.setOpacity === 'function') g.img.setOpacity(overlayAlpha);
+        }
+      }
+
+      function latlon(pt){ return [pt.lat, pt.lon]; }
+
+      function styleVertexMarker(marker, selected){
+        if(!marker) return;
+        if(selected){
+          marker.setStyle({ color:'#064e3b', weight:1.6, fillColor:'#22c55e', fillOpacity:1 });
+        }else{
+          marker.setStyle({ color:'#0b0f18', weight:1, fillColor:'#f59e0b', fillOpacity:1 });
+        }
+      }
+
+      function updateSelectionUI(){
+        document.getElementById('selList').textContent =
+          'Selected: ' + (selectedOrder.length ? selectedOrder.join(' → ') : '-');
+      }
+
+      function setSelected(name, on){
+        const m = nameToVertexMarker.get(name);
+        if(on){
+          if(!selected.has(name)){ selected.add(name); selectedOrder.push(name); }
+          styleVertexMarker(m, true);
+        }else{
+          if(selected.has(name)){ selected.delete(name); selectedOrder = selectedOrder.filter(n => n !== name); }
+          styleVertexMarker(m, false);
+        }
+        updateSelectionUI();
+      }
+
+      function clearSelection(){
+        for(const n of Array.from(selected)) setSelected(n, false);
+        updateSelectionUI();
+      }
+
+      // vertex popup
+      function openMenu(latlng, payload){
+        vmenuFor = payload;
+        vmenuTitle.textContent = payload.name || 'Vertex';
+        const pt = map.latLngToContainerPoint(latlng);
+        vmenu.style.left = Math.round(pt.x + 10) + 'px';
+        vmenu.style.top  = Math.round(pt.y - 10) + 'px';
+        vmenu.style.display = 'block';
+      }
+      function closeMenu(){ vmenu.style.display='none'; vmenuFor = null; }
+      document.addEventListener('pointerdown', (e)=>{ if(!vmenu.contains(e.target)) closeMenu(); });
+
+      document.getElementById('actAddToPatrol').addEventListener('click', ()=>{
+        if(!vmenuFor) return;
+        setSelected(vmenuFor.name, true);
+        closeMenu(); showToast(`Added ${vmenuFor.name}`);
+      });
+      document.getElementById('actRemoveFromPatrol').addEventListener('click', ()=>{
+        if(!vmenuFor) return;
+        setSelected(vmenuFor.name, false);
+        closeMenu(); showToast(`Removed ${vmenuFor.name}`);
+      });
+
+      function updateRobots(list){
+        const seen = new Set();
+        for(const r of list){
+          const key = r.ns || r.robot_name || '?';
+          seen.add(key);
+          const hasPos = Number.isFinite(r.lat) && Number.isFinite(r.lon);
+          let m = markers.get(key);
+          const pct = (typeof r.battery_pct==='number') ? Math.round(r.battery_pct*100) : '-';
+          const label = `${r.robot_name || key} · ${r.ns} · ${r.mode_text || ''} · ${pct}% · ${r.map_name}/${r.floor_name}`;
+          if(!hasPos){ if(m) m.setOpacity(0); continue; }
+          const pt = [r.lat, r.lon];
+          const icon = makeRobotIcon(r.has_fix ? '#22c55e' : '#ef4444', r.heading_deg || 0, !r.has_fix);
+          if(!m){
+            m = L.marker(pt, { icon });
+            m.addTo(map);
+            m.bindTooltip(label, { permanent:false, direction:'top', className:'robot-label' });
+            markers.set(key, m);
           }else{
-            const opt = document.createElement('option'); opt.textContent = '(none)'; sel.appendChild(opt);
+            m.setLatLng(pt);
+            m.setIcon(icon);
+            const tt = m.getTooltip(); if(tt) tt.setContent(label);
           }
-        }catch{
-          const sel = document.getElementById('nsSelect');
-          sel.innerHTML = '<option>(error)</option>';
+          m.setOpacity(1);
         }
-      }
-      document.addEventListener('change', (e)=>{
-        if (e.target && e.target.id === 'nsSelect'){
-          ACTIVE_NS = e.target.value || '';
-          selected.clear(); selectedOrder = []; setSelectedList(selectedOrder);
+        for(const [k,m] of markers.entries()){
+          if(!seen.has(k)) m.setOpacity(0);
         }
-      });
-
-      function refreshGeoInputs(G){
-        document.getElementById('geoLat').value = G.lat;
-        document.getElementById('geoLon').value = G.lon;
-        document.getElementById('geoMPP').value = G.mpp;
-        document.getElementById('geoROT').value = G.rot;
-        document.getElementById('geoTX').value  = G.tx;
-        document.getElementById('geoTY').value  = G.ty;
+        document.getElementById('count').textContent = `${list.length} robot${list.length===1?'':'s'}`;
       }
 
-      document.getElementById('applyGeo').addEventListener('click', ()=>{
-        const G = {
-          lat: parseFloat(document.getElementById('geoLat').value) || DEFAULTS.lat,
-          lon: parseFloat(document.getElementById('geoLon').value) || DEFAULTS.lon,
-          mpp: parseFloat(document.getElementById('geoMPP').value) || 0.05,
-          rot: parseFloat(document.getElementById('geoROT').value) || 0,
-          tx:  parseFloat(document.getElementById('geoTX').value)  || 0,
-          ty:  parseFloat(document.getElementById('geoTY').value)  || 0,
-        };
-        saveGeo(G);
-        if (map) map.setView([G.lat, G.lon]);
-        drawGraph();
-      });
+      function updateMaps(data){
+        lastMapsPayload = data;
+        const infoParts = [];
+        const seen = new Set();
+        const overlayBounds = [];
+        const vertexPts = [];
+        const nsSet = new Set();
 
-      document.getElementById('publish').addEventListener('click', async ()=>{
-        if (!selectedOrder.length){ alert('Select at least one vertex'); return; }
-        const loops = parseInt(document.getElementById('loops').value, 10) || 1;
-        const position = document.getElementById('placeTop').checked ? 'top' : 'bottom';
-        try {
-          const res = await fetch('/api/schedule_patrol', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ waypoints: selectedOrder, loops, position }),
-            credentials: 'same-origin'
+        nameToVertexMarker.clear();
+
+        for(const m of (data.maps || [])){
+          const ns = m.ns || '/';
+          nsSet.add(ns);
+          const key = overlayKey(m);
+          seen.add(key);
+          infoParts.push(`${ns}:${m.map_name}/${m.floor_name}`);
+
+          const g = getOverlayGroup(key);
+          clearOverlayGroup(g);
+
+          // edges (original style: soft blue)
+          if(Array.isArray(m.edges)){
+            for(const e of m.edges){
+              const pts = [latlon(e.a), latlon(e.b)];
+              L.polyline(pts, { weight:1.5, opacity:0.45, color:'#78a6ff' }).addTo(g.edges);
+              vertexPts.push(...pts);
+            }
+          }
+
+          // vertices (original style: orange dot + right label)
+          if(Array.isArray(m.vertices)){
+            for(const v of m.vertices){
+              const ll = [v.lat, v.lon];
+              const cm = L.circleMarker(ll, { radius:3.8, weight:1, color:'#0b0f18', fillColor:'#f59e0b', fillOpacity:1 });
+              cm.bindTooltip(`${v.name}`, { permanent:true, direction:'right', offset:[10,-10], className:'v-label' });
+              cm.on('click', (ev) => {
+                if (ev.originalEvent && (ev.originalEvent.ctrlKey || ev.originalEvent.metaKey)) {
+                  setSelected(v.name, !selected.has(v.name)); return;
+                }
+                openMenu(ev.latlng, { ns, name: v.name, lat: v.lat, lon: v.lon });
+              });
+              cm.addTo(g.verts);
+              nameToVertexMarker.set(v.name, cm);
+              if(selected.has(v.name)) styleVertexMarker(cm, true);
+              vertexPts.push(ll);
+            }
+          }
+
+          // image overlay
+          if(m.overlay && m.image_url){
+            const b = m.overlay.bounds;
+            try{
+              const bounds = L.latLngBounds([b[0][0], b[0][1]], [b[1][0], b[1][1]]);
+              g.img = L.imageOverlay(m.image_url, bounds, { opacity: overlayAlpha, interactive:false }).addTo(map);
+              overlayBounds.push(bounds);
+            }catch(e){ warn('overlay bounds invalid for', key, e); }
+          }
+        }
+
+        // remove groups that vanished
+        for(const [k,g] of overlayGroups.entries()){
+          if(!seen.has(k)){ clearOverlayGroup(g); overlayGroups.delete(k); }
+        }
+
+        // ns selector (first fill)
+        const nsSel = document.getElementById('nsSelect');
+        if(nsSel && nsSel.options.length === 0){
+          [...nsSet].sort().forEach(ns=>{
+            const opt=document.createElement('option'); opt.value=ns; opt.text=ns; nsSel.appendChild(opt);
           });
-          const ct = (res.headers.get('content-type') || '').toLowerCase();
-          const data = ct.includes('application/json') ? await res.json() : { ok:false, error: await res.text() };
-          if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-          alert(`Patrol scheduled ${data.task_id ? '('+data.task_id+')' : ''}`);
-        } catch(e){ alert('Failed to schedule patrol:\n' + e.message); }
-      });
+          if(nsSel.options.length){ activeNs = nsSel.value = nsSel.options[0].value; }
+        }
 
-      document.getElementById('clearSel').addEventListener('click', ()=>{
-        selected.clear(); selectedOrder = []; setSelectedList(selectedOrder); drawVerts();
-      });
+        document.getElementById('mapsInfo').textContent = 'maps: ' + (infoParts.join(' | ') || '-');
+        const countOverlays = [...overlayGroups.values()].filter(v => v.img).length;
+        document.getElementById('overlayInfo').textContent = `overlay: ${countOverlays}`;
 
-      document.getElementById('refresh').addEventListener('click', ()=> init(true));
-
-      // ---------- Data fetch ----------
-      async function fetchGraph(){
-        const j = await (await fetch('/api/graph', { cache:'no-store' })).json();
-        verts = j.vertices || [];
-        edges = j.edges || [];
-      }
-      async function fetchStatus(){
-        const q = ACTIVE_NS ? ('?ns=' + encodeURIComponent(ACTIVE_NS)) : '';
-        return (await fetch('/api/status' + q, { cache:'no-store' })).json();
-      }
-      async function fetchPath(){
-        const q = ACTIVE_NS ? ('?ns=' + encodeURIComponent(ACTIVE_NS)) : '';
-        return (await fetch('/api/path' + q, { cache:'no-store' })).json();
+        if(firstMapCenter){
+          if(!centerOnMaps(overlayBounds, vertexPts)) log('center: no overlay/vertex bounds yet');
+          else firstMapCenter = false;
+        }
       }
 
-      // ---------- Drawing ----------
-      function drawGraph(){
-        if (!map || typeof L === 'undefined') return;
-        const G = loadGeo();
-        edgesLayer.clearLayers(); vertsLayer.clearLayers(); labelsLayer.clearLayers();
+      function centerOnMaps(overlayBounds, vertexPts, pad=0.15){
+        let union = null;
+        if(overlayBounds && overlayBounds.length){
+          for(const b of overlayBounds){ union = union ? union.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast()); }
+        }
+        if(!union && vertexPts && vertexPts.length){
+          for(const p of vertexPts){ const ll=L.latLng(p[0], p[1]); union = union ? union.extend(ll) : L.latLngBounds(ll, ll); }
+        }
+        if(union){ map.fitBounds(union.pad(pad)); return true; }
+        return false;
+      }
 
-        edges.forEach(e => {
-          const a = pxToLatLon(e.ax, e.ay, G);
-          const b = pxToLatLon(e.bx, e.by, G);
-          L.polyline([a,b], { weight:2, opacity:.6, color:'#78a6ff' }).addTo(edgesLayer);
+      async function fetchJSON(url){
+        const r = await fetch(url, { cache:'no-store' });
+        if(!r.ok) throw new Error(`${url} -> HTTP ${r.status}`);
+        return r.json();
+      }
+      async function postJSON(url, body){
+        const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+        const txt = await r.text(); let j={};
+        try{ j = JSON.parse(txt || '{}'); }catch{ j = { raw: txt }; }
+        if(!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+        return j;
+      }
+
+      async function fetchPathFor(ns){
+        if(!ns) return;
+        try{
+          const j = await fetchJSON(`/api/${ns.replace(/^\//,'')}/path`);
+          if(!j || j.ok === false) return;
+          const prev = lastPathSeq.get(ns) || -1;
+          if(j.seq === prev) return; // unchanged
+          lastPathSeq.set(ns, j.seq);
+
+          // draw/update path layer (original style: green polyline)
+          let layer = pathLayers.get(ns);
+          const latlngs = (j.points || []).map(p => [p.lat, p.lon]);
+          if(!layer){
+            layer = L.polyline(latlngs, { color:'#22c55e', weight:3, opacity:0.95 });
+            pathLayers.set(ns, layer);
+            layer.addTo(map);
+          }else{
+            layer.setLatLngs(latlngs);
+          }
+        }catch(e){ /* ignore */ }
+      }
+
+      async function tick(){
+        let robotsOk=false, mapsOk=false, robotsJ=null, mapsJ=null;
+        await Promise.all([
+          (async()=>{ try{ robotsJ = await fetchJSON('/api/robots'); robotsOk = true; }catch(e){ warn('robots fetch failed', e); } })(),
+          (async()=>{ try{ mapsJ   = await fetchJSON('/api/maps');   mapsOk   = true; }catch(e){ warn('maps fetch failed', e);   } })(),
+        ]);
+
+        if(robotsOk){ lastGoodRobots = robotsJ; updateRobots(robotsJ.robots || []); } else { updateRobots(lastGoodRobots.robots || []); }
+        if(mapsOk){ lastGoodMaps = mapsJ; updateMaps(mapsJ); } else { updateMaps(lastGoodMaps); }
+
+        // update path for active ns
+        if(activeNs) fetchPathFor(activeNs);
+
+        setStatus((robotsOk && mapsOk) ? ('ok ' + new Date().toLocaleTimeString()) : 'degraded');
+      }
+
+      window.addEventListener('load', ()=>{
+        createMap();
+
+        document.getElementById('opacity').addEventListener('input', (e)=>{ overlayAlpha = parseFloat(e.target.value || '0.5'); applyOverlayAlpha(); });
+        document.getElementById('btnCenterMap').addEventListener('click', ()=>{
+          const overlayBounds=[], vertexPts=[];
+          for(const m of (lastGoodMaps.maps || [])){
+            if(m.overlay && m.overlay.bounds){
+              const b=m.overlay.bounds;
+              try{ overlayBounds.push(L.latLngBounds([b[0][0], b[0][1]], [b[1][0], b[1][1]])); }catch{}
+            }
+            if(Array.isArray(m.vertices)){ for(const v of m.vertices) vertexPts.push([v.lat, v.lon]); }
+            if(Array.isArray(m.edges)){ for(const e of m.edges){ vertexPts.push([e.a.lat,e.a.lon],[e.b.lat,e.b.lon]); } }
+          }
+          if(!centerOnMaps(overlayBounds, vertexPts)) warn('center: nothing to fit');
         });
 
-        drawVerts();
-      }
+        document.getElementById('nsSelect').addEventListener('change', (e)=>{ activeNs = e.target.value || '/'; });
 
-      function drawVerts(){
-        if (!map || typeof L === 'undefined') return;
-        const G = loadGeo();
-        vertsLayer.clearLayers(); labelsLayer.clearLayers();
-
-        verts.forEach(v => {
-          const ll = pxToLatLon(v.x, v.y, G);
-          const dot = L.circleMarker(ll, { radius:4, color: selected.has(v.name) ? '#22c55e' : '#f59e0b', weight:2, fillOpacity:1 }).addTo(vertsLayer);
-          dot.on('click', () => {
-            if (selected.has(v.name)){ selected.delete(v.name); selectedOrder = selectedOrder.filter(n => n !== v.name); }
-            else { selected.add(v.name); selectedOrder.push(v.name); }
-            setSelectedList(selectedOrder);
-            drawVerts();
-          });
-
-          L.marker(ll, {
-            icon: L.divIcon({ className:'label', html: v.name, iconSize:[0,0] })
-          }).addTo(labelsLayer);
+        document.getElementById('btnPublishPatrol').addEventListener('click', async ()=>{
+          if(!activeNs) return alert('Select namespace');
+          if(!selectedOrder.length) return alert('Select at least one vertex');
+          try{
+            await postJSON(`/api/${activeNs.replace(/^\//,'')}/patrol`, { sequence: selectedOrder, loops: 1 });
+            showToast('Patrol scheduled');
+          }catch(e){ alert('Patrol failed: ' + e.message); }
         });
-      }
 
-      function drawPath(pathJ){
-        if (!map || typeof L === 'undefined') return;
-        if (!pathJ || !pathJ.path) return;
-        if (typeof pathJ.seq === 'number' && pathJ.seq === pathSeq) return;
-        pathSeq = pathJ.seq;
+        document.getElementById('btnClearSel').addEventListener('click', clearSelection);
 
-        const G = loadGeo();
-        pathLayer.clearLayers();
-        const pts = pathJ.path.map(p => pxToLatLon(p.x, p.y, G));
-        if (pts.length){
-          L.polyline(pts, { weight:3, color:'#22c55e' }).addTo(pathLayer);
-        }
-      }
+        document.getElementById('btnCancelAll').addEventListener('click', async ()=>{
+          if(!activeNs) return alert('Select namespace');
+          try{ await postJSON(`/api/${activeNs.replace(/^\//,'')}/cancel_all`, {}); showToast('CancelAll sent'); }
+          catch(e){ alert('CancelAll failed: ' + e.message); }
+        });
 
-      function drawRobot(status){
-        robotLayer.clearLayers();
-        if (!map || typeof L === 'undefined') return;
-        if (!status || !status.ok) { setInfoText(`[${ACTIVE_NS||'-'}] pose -`); return; }
+        document.getElementById('btnReturnHome').addEventListener('click', async ()=>{
+          if(!activeNs) return alert('Select namespace');
+          try{ await postJSON(`/api/${activeNs.replace(/^\//,'')}/return_home`, {}); showToast('Return home sent'); }
+          catch(e){ alert('Return home failed: ' + e.message); }
+        });
 
-        const G = loadGeo();
-        const ll = pxToLatLon(status.x, status.y, G);
-        const yaw = status.yaw || 0;
-        const len = 1.0, w = 0.6;
-        const tipM = [Math.cos(yaw)*len, Math.sin(yaw)*len];
-        const leftM = [Math.cos(yaw+Math.PI*0.8)*w, Math.sin(yaw+Math.PI*0.8)*w];
-        const rightM= [Math.cos(yaw-Math.PI*0.8)*w, Math.sin(yaw-Math.PI*0.8)*w];
-
-        function mOffsetToLatLon(baseLL, offsetM){
-          const lat = baseLL[0] + r2d(offsetM[1] / R);
-          const lon = baseLL[1] + r2d(offsetM[0] / (R * Math.cos(d2r(baseLL[0]))));
-          return [lat, lon];
-        }
-
-        const p0 = ll;
-        const p1 = mOffsetToLatLon(ll, tipM);
-        const p2 = mOffsetToLatLon(ll, leftM);
-        const p3 = mOffsetToLatLon(ll, rightM);
-
-        L.polygon([p1,p2,p0,p3], { color:'#ef4444', weight:2, fillOpacity:0.9 }).addTo(robotLayer);
-        setInfoText(`[${ACTIVE_NS||'-'}] pose ok`);
-        if (!drawRobot._centered) { map.setView(ll, 19); drawRobot._centered = true; }
-      }
-
-      // ---------- Timer ----------
-      let timer = null;
-      function startTimer(){
-        if (timer) clearInterval(timer);
-        timer = setInterval(async ()=>{
-          try {
-            const [st, p] = await Promise.all([fetchStatus(), fetchPath()]);
-            drawPath(p);
-            drawRobot(st);
-          } catch {}
-        }, 1000);
-      }
-
-      // ---------- Init ----------
-      async function init(force=false){
-        const defs = await fetchOsmDefaults();
-        const G0 = loadGeo();
-        if (!G0.lat && !G0.lon){ G0.lat = defs.lat; G0.lon = defs.lon; saveGeo(G0); }
-        refreshGeoInputs(G0);
-
-        initMap(G0.lat || defs.lat, G0.lon || defs.lon, defs.zoom || DEFAULTS.zoom);
-
-        await populateNamespaces();
-        await fetchGraph();
-        drawGraph();
-        startTimer();
-        setSelectedList(selectedOrder);
-
-        // If Leaflet failed to load, warn operator
-        setTimeout(() => {
-          if (typeof L === 'undefined'){
-            document.getElementById('offlineBanner').style.display = 'block';
-            setInfoText('offline/map assets missing');
-          }
-        }, 800);
-      }
-      init();
+        setInterval(tick, 1000);
+      });
     </script>
   </body>
 </html>

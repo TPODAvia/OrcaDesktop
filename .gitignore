@@ -1,3 +1,5 @@
 build
 install
 log
+docker/grafana/
+docker/influxdb/

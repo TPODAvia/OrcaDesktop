@@ -6,3 +6,9 @@ echo "deb [trusted=yes] https://download.eclipse.org/zenoh/debian-repo/ /" | sud
 sudo apt update
 sudo apt install zenoh-bridge-ros2dds
 
+
+
+http://127.0.0.1:3000
+
+sudo chmod -R 777 ./grafana/data
+sudo chmod -R 777 ./grafana/provisioning

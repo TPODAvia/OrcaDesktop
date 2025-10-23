@@ -12,3 +12,7 @@ docker compose run ros2_cli
 sudo apt install zenohd zenoh-plugin-ros2dds
 pip install -U zenoh-cli
 zenoh-cli sub -e tcp/HOST_A_IP:7447 '/vboxuser_Ubuntu22/**'
+
+
+sudo chown -R 472:472 ./grafana/data
+sudo chown -R 472:472 ./grafana/provisioning

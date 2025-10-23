@@ -1,792 +1,558 @@
 #!/usr/bin/env python3
-import os, threading, time, math, json, signal
+# Multi-robot OSM view with vertices/lanes + optional raster overlay
+# - No vertex editing endpoints. UI only selects waypoints for patrol.
+# - Path endpoint returns current planned path in WGS84 for the active ns.
+# - Robust against publisher restarts (UI falls back to last good payloads).
+
+import os, sys, math, time, json, threading
 from dataclasses import dataclass
-from typing import Dict, Optional, List
+from typing import Dict, Tuple, Optional, List
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from rclpy.task import Future
-from rclpy._rclpy_pybind11 import RCLError
-from rclpy.serialization import deserialize_message, serialize_message
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from rclpy.qos_event import SubscriptionEventCallbacks
 
-from ament_index_python.packages import get_package_share_directory
-
-from flask import Flask, Response, render_template, request, redirect, url_for, send_file, jsonify, make_response
+from flask import Flask, jsonify, render_template, make_response, request
 from waitress import serve
 
-from rmf_manager_msgs.srv import (
-    SchedulePatrol, ScheduleDelivery, ScheduleGoTo,
-    CancelTask, CancelAll, ListTasks, SetResumeAfterCharge,
-    TriggerDelivery, MoveTask
-)
-from rmf_manager_msgs.msg import RobotState, RobotCommand
+from rmf_manager_msgs.msg import RobotState, MapMetadata
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Quaternion
 
-import yaml
-import sys
-import zenoh
+# Optional cv2 encoder
+try:
+    from cv_bridge import CvBridge
+    import cv2
+    _HAS_CV = True
+except Exception:
+    _HAS_CV = False
+
+# Optional services/publisher (best-effort)
+try:
+    from rmf_manager_msgs.srv import SchedulePatrol, ScheduleGoTo, CancelAll
+    _HAS_SRVS = True
+except Exception:
+    _HAS_SRVS = False
+
+try:
+    from rmf_manager_msgs.msg import RobotCommand
+    _HAS_CMD = True
+except Exception:
+    _HAS_CMD = False
 
 
-# --------- small graph helper (pixels + meters) ----------
+# ---------------- models ----------------
+
+@dataclass(frozen=True)
+class MapKey:
+    ns: str
+    map_name: str
+    floor_name: str
+
 @dataclass
-class V:
-    name: str; xm: float; ym: float; xp: float; yp: float
+class GeoRef:
+    available: bool = False
+    lat0: float = float("nan")
+    lon0: float = float("nan")
+    alt0: float = float("nan")
+    yaw_map_to_enu: float = 0.0
+    epsg: str = ""
 
-class Graph:
+    @classmethod
+    def from_meta(cls, m: MapMetadata) -> "GeoRef":
+        def _f(x, d=0.0):
+            try: return float(x)
+            except Exception: return d
+        return cls(
+            available=bool(getattr(m, "wcs_available", False)),
+            lat0=_f(getattr(m, "wcs_origin_lat", float("nan")), float("nan")),
+            lon0=_f(getattr(m, "wcs_origin_lon", float("nan")), float("nan")),
+            alt0=_f(getattr(m, "wcs_origin_alt", float("nan")), float("nan")),
+            yaw_map_to_enu=_f(getattr(m, "wcs_yaw", 0.0), 0.0),
+            epsg=str(getattr(m, "wcs_epsg", "")),
+        )
+
+@dataclass
+class RobotEntry:
+    ns: str
+    last_state: Optional[RobotState] = None
+    last_seen: float = 0.0
+    lat: float = float("nan")
+    lon: float = float("nan")
+    alt: float = float("nan")
+    heading_deg: float = float("nan")
+    map_key: Optional[MapKey] = None
+    has_fix: bool = False
+
+
+# ---------------- helpers ----------------
+
+def quat_to_yaw(q: Quaternion) -> float:
+    x, y, z, w = q.x, q.y, q.z, q.w
+    s = 2.0 * (w * z + x * y)
+    c = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(s, c)
+
+def wrap_deg(d: float) -> float:
+    while d <= -180.0: d += 360.0
+    while d >   180.0: d -= 360.0
+    return d
+
+_EARTH_R = 6378137.0
+def enu_to_latlon(lat0_deg: float, lon0_deg: float, east_m: float, north_m: float) -> Tuple[float, float]:
+    lat0 = math.radians(lat0_deg)
+    dlat = north_m / _EARTH_R
+    dlon = east_m / (_EARTH_R * math.cos(lat0))
+    return math.degrees(lat0 + dlat), lon0_deg + math.degrees(dlon)
+
+
+# ---------------- main ----------------
+
+class MultiRobotDashboard(Node):
     def __init__(self):
-        self.V: Dict[str, V] = {}
-        self.E: List[dict] = []
-        self.image_path = ''
-        self.rot = 0.0
-        self.scale = 1.0
-        self.tx = 0.0
-        self.ty = 0.0
+        super().__init__("rmf_dashboard_multi")
 
-    def load_params(self, ppath: str):
-        if not ppath or not os.path.exists(ppath):
+        # Params
+        self.ui_host = self.declare_parameter("ui_host", "0.0.0.0").get_parameter_value().string_value
+        self.ui_port = int(self.declare_parameter("ui_port", 5080).get_parameter_value().integer_value or 5080)
+        self.viz_update_hz = float(self.declare_parameter("viz_update_hz", 1.0).get_parameter_value().double_value or 1.0)
+        self.discovery_hz = float(self.declare_parameter("discovery_hz", 0.5).get_parameter_value().double_value or 0.5)
+        self.debug = bool(self.declare_parameter("debug", True).get_parameter_value().bool_value)
+        self.image_overlay_enable = bool(self.declare_parameter("image_overlay_enable", True).get_parameter_value().bool_value)
+        self.image_overlay_force_bbox = bool(self.declare_parameter("image_overlay_force_bbox", False).get_parameter_value().bool_value)
+
+        # QoS
+        self._qos_state = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
+                                     durability=DurabilityPolicy.VOLATILE, history=HistoryPolicy.KEEP_LAST)
+        self._qos_meta  = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
+                                     durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
+        self._qos_img   = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
+                                     durability=DurabilityPolicy.VOLATILE, history=HistoryPolicy.KEEP_LAST)
+
+        # Stores
+        self._robots: Dict[str, RobotEntry] = {}
+        self._known_ns: Dict[str, Dict[str, object]] = {}
+        self._georef: Dict[str, GeoRef] = {}
+        self._meta: Dict[str, MapMetadata] = {}
+        self._img_png: Dict[str, bytes] = {}
+        self._img_wh: Dict[str, Tuple[int,int]] = {}
+        self._bridge = CvBridge() if _HAS_CV else None
+
+        # Path change tracking
+        self._last_path_names: Dict[str, List[str]] = {}
+        self._path_seq: Dict[str, int] = {}
+
+        # Optional command publisher
+        if _HAS_CMD:
+            qos_cmd = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
+            self.cmd_pub = self.create_publisher(RobotCommand, "/rmf/command", qos_cmd)
+        else:
+            self.cmd_pub = None
+
+        # Services cache
+        self._clients = {}
+
+        # Web + timers
+        self._start_web()
+        self.create_timer(1.0/max(0.1,self.discovery_hz), self._discover_ns)
+        self.create_timer(1.0/max(0.1,self.viz_update_hz), self._tick_projection)
+
+        self.get_logger().info(f"UI http://{self.ui_host}:{self.ui_port}  overlay={self.image_overlay_enable}")
+
+    # ---------- discovery ----------
+    def _discover_ns(self):
+        try:
+            topics = self.get_topic_names_and_types()
+        except Exception as e:
+            self.get_logger().warn(f"[discover] failed: {e}")
             return
-        with open(ppath, 'r') as f:
-            d = yaml.safe_load(f) or {}
-        params = d.get('/**', {}).get('ros__parameters', {})
-        self.rot   = float(params.get('rotation', 0.0))
-        self.scale = float(params.get('scale', 1.0))
-        self.tx    = float(params.get('translation_x', 0.0))
-        self.ty    = float(params.get('translation_y', 0.0))
+        ns_set = set()
+        for name, _ in topics:
+            if name.endswith("/rmf/state"):
+                ns_set.add(name[:-len("/rmf/state")] or "")
+        for ns in ns_set:
+            if ns in self._known_ns:
+                continue
+            self._attach_ns(ns)
 
-    def apply_tr(self, xpx, ypx):
-        xr = xpx * self.scale
-        yr = ypx * self.scale
-        c = math.cos(self.rot); s = math.sin(self.rot)
-        xo = xr*c - yr*s + self.tx
-        yo = -(xr*s + yr*c) + self.ty
+    def _attach_ns(self, ns: str):
+        s_topic = f"{ns}/rmf/state" if ns else "/rmf/state"
+        m_topic = f"{ns}/rmf/map_metadata" if ns else "/rmf/map_metadata"
+        i_topic = f"{ns}/rmf/map_image" if ns else "/rmf/map_image"
+
+        self.get_logger().info(f"[discover] attach ns='{ns or '/'}'  state={s_topic} meta={m_topic} image={i_topic}")
+
+        cb_ev = SubscriptionEventCallbacks(
+            incompatible_qos=lambda info: self.get_logger().warn(
+                f"[QoS] incompatible on ns='{ns or '/'}' total={info.total_count} last={getattr(info,'last_policy_kind',None)}")
+        )
+
+        subs = {}
+        subs["state"] = self.create_subscription(RobotState, s_topic, lambda m,ns=ns:self._on_state(ns,m), self._qos_state, event_callbacks=cb_ev)
+        subs["meta"]  = self.create_subscription(MapMetadata, m_topic, lambda m,ns=ns:self._on_meta(ns,m),  self._qos_meta,  event_callbacks=cb_ev)
+        subs["image"] = self.create_subscription(Image,       i_topic, lambda m,ns=ns:self._on_image(ns,m), self._qos_img,   event_callbacks=cb_ev)
+
+        if ns not in self._robots:
+            self._robots[ns] = RobotEntry(ns=ns)
+        self._known_ns[ns] = subs
+
+    # ---------- ROS callbacks ----------
+    def _on_state(self, ns: str, msg: RobotState):
+        ent = self._robots.get(ns) or RobotEntry(ns=ns)
+        ent.last_state = msg
+        ent.last_seen = time.time()
+        ent.map_key = MapKey(ns, msg.map_name or "", msg.floor_name or "")
+        self._robots[ns] = ent
+
+    def _on_meta(self, ns: str, msg: MapMetadata):
+        self._meta[ns] = msg
+        self._georef[ns] = GeoRef.from_meta(msg)
+        # reset path seq for this ns on map change
+        self._last_path_names[ns] = []
+        self._path_seq[ns] = 0
+        self.get_logger().info(
+            f"[meta] ns='{ns or '/'}' map={msg.map_name}/{msg.floor_name} wcs={self._georef[ns].available}"
+        )
+
+    def _on_image(self, ns: str, img: Image):
+        if not _HAS_CV or self._bridge is None:
+            return
+        try:
+            enc = 'mono8' if img.encoding in ('mono8','8UC1') else 'rgb8'
+            cv_img = self._bridge.imgmsg_to_cv2(img, desired_encoding=enc)
+            h, w = cv_img.shape[:2]
+            ok, buf = cv2.imencode(".png", cv_img)
+            if ok:
+                self._img_png[ns] = buf.tobytes()
+                self._img_wh[ns] = (w, h)
+        except Exception as e:
+            self.get_logger().warn(f"[map_image] ns='{ns or '/'}' encode failed: {e}")
+
+    # ---------- projection ----------
+    def _tick_projection(self):
+        for ns, ent in self._robots.items():
+            s = ent.last_state
+            if not s:
+                continue
+            gr = self._georef.get(ns)
+            lat = lon = alt = float("nan")
+            heading_deg = float("nan")
+            has_fix = False
+            if gr and gr.available and math.isfinite(gr.lat0) and math.isfinite(gr.lon0):
+                x = float(getattr(s.pose, "x", 0.0))
+                y = float(getattr(s.pose, "y", 0.0))
+                c, sn = math.cos(gr.yaw_map_to_enu), math.sin(gr.yaw_map_to_enu)
+                east =  c * x - sn * y
+                north = sn * x +  c * y
+                lat, lon = enu_to_latlon(gr.lat0, gr.lon0, east, north)
+                yaw_world = gr.yaw_map_to_enu + float(getattr(s.pose, "theta", 0.0))
+                heading_deg = wrap_deg(90.0 - math.degrees(yaw_world))
+                has_fix = True
+            elif bool(getattr(s, "wcs_has_fix", False)):
+                lat = float(getattr(s, "wcs_lat", float("nan")))
+                lon = float(getattr(s, "wcs_lon", float("nan")))
+                alt = float(getattr(s, "wcs_alt", float("nan")))
+                q = getattr(s, "wcs_orientation_enu", Quaternion())
+                heading_deg = wrap_deg(90.0 - math.degrees(quat_to_yaw(q)))
+                has_fix = True
+            ent.lat, ent.lon, ent.alt, ent.heading_deg, ent.has_fix = lat, lon, alt, heading_deg, has_fix
+
+    # ---------- transforms ----------
+    @staticmethod
+    def _px_to_m(meta: MapMetadata, xpx: float, ypx: float) -> Tuple[float, float]:
+        xr = xpx * float(meta.scale)
+        yr = ypx * float(meta.scale)
+        c, s = math.cos(float(meta.rotation)), math.sin(float(meta.rotation))
+        xo = xr * c - yr * s + float(meta.translation_x)
+        yo = -(xr * s + yr * c) + float(meta.translation_y)
         return xo, yo
 
-    def invert_tr(self, xm, ym):
-        x = xm - self.tx
-        y = self.ty - ym
-        c = math.cos(self.rot); s = math.sin(self.rot)
-        xr = x*c + y*s
-        yr = -x*s + y*c
-        if self.scale == 0:
-            return 0.0, 0.0
-        return xr/self.scale, yr/self.scale
+    @staticmethod
+    def _m_to_enu(gr: GeoRef, xm: float, ym: float) -> Tuple[float, float]:
+        c, s = math.cos(gr.yaw_map_to_enu), math.sin(gr.yaw_map_to_enu)
+        east =  c * xm - s * ym
+        north = s * xm +  c * ym
+        return east, north
 
-    def load_building(self, bpath: str):
-        if not bpath or not os.path.exists(bpath):
-            return
-        with open(bpath, 'r') as f:
-            b = yaml.safe_load(f) or {}
-        levels = b.get('levels', {})
-        lvl = list(levels.keys())[0] if levels else None
-        L = levels.get(lvl, {})
+    def _vertex_latlon(self, ns: str, v) -> Optional[Tuple[float,float]]:
+        meta = self._meta.get(ns); gr = self._georef.get(ns)
+        if not (meta and gr and gr.available and math.isfinite(gr.lat0) and math.isfinite(gr.lon0)):
+            return None
+        xm = float(getattr(v, "xm", float("nan"))); ym = float(getattr(v, "ym", float("nan")))
+        if not (math.isfinite(xm) and math.isfinite(ym)):
+            xp = float(getattr(v, "xp", 0.0)); yp = float(getattr(v, "yp", 0.0))
+            xm, ym = self._px_to_m(meta, xp, yp)
+        east, north = self._m_to_enu(gr, xm, ym)
+        return enu_to_latlon(gr.lat0, gr.lon0, east, north)
 
-        drawing = L.get('drawing', {})
-        if isinstance(drawing, dict) and 'filename' in drawing:
-            self.image_path = os.path.abspath(
-                os.path.join(os.path.dirname(bpath), drawing['filename'])
-            )
+    def _image_bounds_latlon(self, ns: str):
+        if not self.image_overlay_enable:
+            return (False, "overlay_disabled", None)
+        meta = self._meta.get(ns); gr = self._georef.get(ns); wh = self._img_wh.get(ns)
+        if not meta: return (False, "no_metadata", None)
+        if not (gr and gr.available and math.isfinite(gr.lat0) and math.isfinite(gr.lon0)):
+            return (False, "no_georef", None)
+        if not wh: return (False, "no_image", None)
+        w, h = wh
+        corners_px = [(0,0), (w,0), (w,h), (0,h)]
+        pts_ll = []
+        for (px, py) in corners_px:
+            xm, ym = self._px_to_m(meta, float(px), float(py))
+            east, north = self._m_to_enu(gr, xm, ym)
+            lat, lon = enu_to_latlon(gr.lat0, gr.lon0, east, north)
+            pts_ll.append((lat, lon))
+        rotated = (abs(float(meta.rotation)) > 1e-3) or (abs(gr.yaw_map_to_enu) > 1e-3)
+        if rotated and not self.image_overlay_force_bbox:
+            return (False, "rotated_image_overlay_requires_bbox_or_plugin", None)
+        lats = [p[0] for p in pts_ll]
+        lons = [p[1] for p in pts_ll]
+        return (True, "ok", [[min(lats), min(lons)], [max(lats), max(lons)]])
 
-        verts = L.get('vertices', [])
-        id2name: Dict[int, str] = {}
-        self.V.clear()
-        for i, v in enumerate(verts):
-            if isinstance(v, dict):
-                xpx = float(v.get('x', 0)); ypx = float(v.get('y', 0))
-                name = str(v.get('name', f'v{i}')) or f'v{i}'
-            else:
-                xpx = float(v[0]); ypx = float(v[1])
-                name = str(v[3] if len(v) > 3 else (v[2] if len(v) > 2 else f'v{i}')) or f'v{i}'
-            xm, ym = self.apply_tr(xpx, ypx)
-            self.V[name] = V(name, xm, ym, xpx, ypx)
-            id2name[i] = name
+    # ---------- services / helpers ----------
+    def _client(self, ns: str, srv_name: str, srv_type):
+        key = (ns, srv_name)
+        cli = self._clients.get(key)
+        if cli is None:
+            full = f"{ns}/{srv_name}" if ns else f"/{srv_name}"
+            cli = self.create_client(srv_type, full)
+            self._clients[key] = cli
+        return cli
 
-        self.E = []
-        for ln in L.get('lanes', []):
-            if isinstance(ln, list) and len(ln) >= 2 and ln[0] in id2name and ln[1] in id2name:
-                a = id2name[ln[0]]; b = id2name[ln[1]]
-                ax, ay = self.V[a].xp, self.V[a].yp
-                bx, by = self.V[b].xp, self.V[b].yp
-                self.E.append({'a': a, 'b': b, 'ax': ax, 'ay': ay, 'bx': bx, 'by': by})
-
-
-# ---------------- Zenoh helpers ----------------
-def _norm_ns(ns: str) -> str:
-    parts = [p for p in str(ns).split('/') if p]
-    return '/'.join(parts)
-
-def _ns_key(ns: str, topic: str) -> str:
-    ns_clean = _norm_ns(ns)
-    top_clean = _norm_ns(topic)
-    return f'{ns_clean}/{top_clean}' if ns_clean else top_clean
-
-
-def _guess_image_mime(b: bytes) -> Optional[str]:
-    if not b or len(b) < 4:
-        return None
-    if b[:8] == b'\x89PNG\r\n\x1a\n':
-        return 'image/png'
-    if b[:3] == b'\xff\xd8\xff':
-        return 'image/jpeg'
-    return None
-
-
-# --------- main node ----------
-class DashboardNode(Node):
-    def __init__(self):
-        super().__init__('rmf_dashboard')
-
-        # ----------------- params -----------------
-        self.ui_host = self.declare_parameter('ui_host', '0.0.0.0').value
-        self.ui_port = int(self.declare_parameter('ui_port', 5005).value)
-        self.ui_viz_host = self.declare_parameter('ui_viz_host', '0.0.0.0').value
-        self.ui_viz_port = int(self.declare_parameter('ui_viz_port', 8080).value)
-        self.viz_update_hz = float(self.declare_parameter('viz_update_hz', 1.0).value)
-        self.param_yaml_path = self.declare_parameter('param_yaml_path', '').value
-        self.building_yaml_path = self.declare_parameter('building_yaml_path', '').value
-
-        # OSM default center (used by viz; page still works with no robots)
-        self.osm_default_lat = float(self.declare_parameter('osm_default_lat', 55.751244).value)
-        self.osm_default_lon = float(self.declare_parameter('osm_default_lon', 37.618423).value)
-        self.osm_default_zoom = int(self.declare_parameter('osm_default_zoom', 17).value)
-
-        # multi-robot via Zenoh (comma-separated)
-        ns_csv = self.declare_parameter('robot_namespaces', '/vboxuser_Ubuntu22').value
-        self.namespaces: List[str] = [_norm_ns(n) for n in str(ns_csv).split(',') if n.strip()]
-        if not self.namespaces:
-            self.namespaces = ['vboxuser_Ubuntu22']
-        self.primary_ns = self.namespaces[0]
-
-        # Zenoh config (match your router)
-        self.zenoh_mode   = self.declare_parameter('zenoh_mode', 'peer').value        # peer|client|router
-        self.zenoh_connect= self.declare_parameter('zenoh_connect', 'tcp/192.168.196.48:7447').value
-        self.zenoh_listen = self.declare_parameter('zenoh_listen', 'tcp/0.0.0.0:7448').value
-
-        # graph
-        self.g = Graph()
-        self.g.load_params(self.param_yaml_path)
-        self.g.load_building(self.building_yaml_path)
-
-        # --------------- ROS I/O ---------------
-        qos = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
-        self.state_sub = self.create_subscription(RobotState, '/rmf/state', self._on_state_ros, qos)
-        self.cmd_pub   = self.create_publisher(RobotCommand, '/rmf/command', qos)
-
-        # services clients
-        self.cli_list   = self.create_client(ListTasks, 'list_tasks')
-        self.cli_patrol = self.create_client(SchedulePatrol, 'schedule_patrol')
-        self.cli_deliv  = self.create_client(ScheduleDelivery, 'schedule_delivery')
-        self.cli_goto   = self.create_client(ScheduleGoTo, 'schedule_goto')
-        self.cli_cancel = self.create_client(CancelTask, 'cancel_task')
-        self.cli_cancel_all = self.create_client(CancelAll, 'cancel_all')
-        self.cli_resume = self.create_client(SetResumeAfterCharge, 'set_resume_after_charge')
-        self.cli_trigger= self.create_client(TriggerDelivery, 'trigger_delivery')
-        self.cli_move   = self.create_client(MoveTask, 'move_task')
-
-        # --------------- caches ---------------
-        self._last_state: Optional[RobotState] = None
-        self._z_states: Dict[str, Optional[RobotState]] = {ns: None for ns in self.namespaces}
-        self._z_events: Dict[str, Optional[bytes]] = {ns: None for ns in self.namespaces}
-        self._z_last_heard: Dict[str, float] = {ns: 0.0 for ns in self.namespaces}
-        self._z_diag_text: Dict[str, Optional[bytes]] = {ns: None for ns in self.namespaces}
-        self._z_image: Dict[str, Optional[bytes]] = {ns: None for ns in self.namespaces}
-
-        self._tasks_lock = threading.Lock()
-        self._tasks_cache = {
-            'rev': 0,
-            '_sig': '',
-            'ts': 0.0,
-            'queue_len': 0,
-            'scheduled': [],
-            'current_task': None,
-            'returning_home': False,
-            'docked': False,
-            'resume_after_charge': False,
-        }
-        self._tasks_ttl = 1.0  # seconds
-        self._FINAL_STATUSES = {
-            'done','finished','completed','complete','success','succeeded',
-            'canceled','cancelled','failed','aborted','timeout','timed out'
-        }
-
-        # --------------- Zenoh ---------------
-        self._open_zenoh()
-        self._declare_zenoh_subscriptions()
-
-        # --------------- web servers ---------------
-        self._start_dashboard_server()  # :5005 Task Manager + Robots
-        self._start_viz_server()        # :8080 OSM Visualizer
-
-    # ---------------- Zenoh ----------------
-    def _open_zenoh(self):
-        cfg = zenoh.Config()
-        cfg.insert_json5('mode', json.dumps(self.zenoh_mode))
-        if self.zenoh_connect:
-            eps = [e.strip() for e in str(self.zenoh_connect).split(',') if e.strip()]
-            if eps:
-                cfg.insert_json5('connect/endpoints', json.dumps(eps))
-        if self.zenoh_listen:
-            eps = [e.strip() for e in str(self.zenoh_listen).split(',') if e.strip()]
-            if eps:
-                cfg.insert_json5('listen/endpoints', json.dumps(eps))
-        self.get_logger().info(f'[zenoh] opening session: mode={self.zenoh_mode}')
-        self._z = zenoh.open(cfg)
-
-        self._z_cmd_writers: Dict[str, zenoh.Publisher] = {}
-        for ns in self.namespaces:
-            key = _ns_key(ns, '/rmf/command')
-            self._z_cmd_writers[ns] = self._z.declare_publisher(key)
-
-    def _declare_zenoh_subscriptions(self):
-        def mk_state_cb(ns: str):
-            def _cb(sample: zenoh.Sample):
-                try:
-                    msg = deserialize_message(sample.payload.to_bytes(), RobotState)
-                    self._z_states[ns] = msg
-                    self._z_last_heard[ns] = time.time()
-                except Exception as e:
-                    self.get_logger().debug(f'[{ns}] /rmf/state deserialization failed: {e}')
-            return _cb
-
-        for ns in self.namespaces:
-            self._z.declare_subscriber(_ns_key(ns, '/rmf/state'), mk_state_cb(ns))
-            self._z.declare_subscriber(_ns_key(ns, '/rmf/event'),
-                                       lambda s, ns=ns: self._cache_bytes(ns, '_z_events', s.payload.to_bytes()))
-            self._z.declare_subscriber(_ns_key(ns, '/diagnostics'),
-                                       lambda s, ns=ns: self._cache_bytes(ns, '_z_diag_text', s.payload.to_bytes()))
-            self._z.declare_subscriber(_ns_key(ns, '/depth_camera/image'),
-                                       lambda s, ns=ns: self._cache_bytes(ns, '_z_image', s.payload.to_bytes()))
-            for t in ('/chatter','/gps/data','/imu/data','/map/2d_map','/tf'):
-                self._z.declare_subscriber(_ns_key(ns, t), lambda s, ns=ns: self._touch_heard(ns))
-
-        self.get_logger().info(f'[zenoh] subscriptions ready for {len(self.namespaces)} namespaces')
-
-    def _cache_bytes(self, ns: str, attr: str, payload: bytes):
-        getattr(self, attr)[ns] = payload
-        self._z_last_heard[ns] = time.time()
-
-    def _touch_heard(self, ns: str):
-        self._z_last_heard[ns] = time.time()
-
-    def _publish_command_zenoh(self, msg: RobotCommand, ns: Optional[str] = None):
-        data = serialize_message(msg)
-        targets = [ns] if ns else list(self.namespaces)
-        for tns in targets:
-            pub = self._z_cmd_writers.get(tns)
-            if pub:
-                pub.put(data)
-
-    # ---------------- ROS callbacks ----------------
-    def _on_state_ros(self, msg: RobotState):
-        self._last_state = msg
-
-    # ---- util to call services sync-ish ----
-    def _call(self, client, req, timeout=5.0):
-        if not client.wait_for_service(timeout_sec=timeout):
-            raise RuntimeError(f"service {client.srv_name} unavailable")
-        fut: Future = client.call_async(req)
-        deadline = time.time() + timeout
-        while rclpy.ok() and not fut.done() and time.time() < deadline:
+    def _call(self, cli, req, timeout=8.0):
+        if not cli.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError("service unavailable")
+        fut = cli.call_async(req)
+        t0 = time.time()
+        while rclpy.ok() and (time.time() - t0) < timeout:
+            if fut.done(): return fut.result()
             time.sleep(0.01)
-        if not fut.done():
-            raise RuntimeError(f"{client.srv_name} timeout")
-        return fut.result()
+        raise RuntimeError("service timeout")
 
-    def _is_final(self, t: dict) -> bool:
-        st = (t.get('status') or '').strip().lower()
-        if t.get('finished') or t.get('is_finished') or t.get('done'):
-            return True
-        return any(word in st for word in self._FINAL_STATUSES)
-
-    def _filter_and_order_scheduled(self, items: list) -> list:
-        dedup = {}
-        for idx, t in enumerate(items or []):
-            if not isinstance(t, dict):
-                continue
-            if self._is_final(t):
-                continue
-            tid = str(t.get('id', ''))
-            if 'position' not in t:
-                t['position'] = idx
-            dedup[tid] = t
-        active = list(dedup.values())
-        active.sort(key=lambda x: int(x.get('position', 0)))
-        for i, t in enumerate(active):
-            t.setdefault('type', '')
-            t.setdefault('status', '')
-            t.setdefault('waypoints', [])
-            t.setdefault('loops', 1)
-            t.setdefault('pickup', '')
-            t.setdefault('dropoff', '')
-            t.setdefault('wait_for_trigger', False)
-            t['position'] = i
-        return active
-
-    def _normalize_tasks_payload(self, payload: dict) -> dict:
-        scheduled = self._filter_and_order_scheduled(payload.get('scheduled') or [])
-        cur = payload.get('current_task') or None
-        if isinstance(cur, dict) and self._is_final(cur):
-            cur = None
-        scheduled_with_current = list(scheduled)
-        if isinstance(cur, dict):
-            cur = dict(cur)
-            cur.setdefault('type', '')
-            cur.setdefault('status', '')
-            cur.setdefault('waypoints', [])
-            cur.setdefault('loops', 1)
-            cur.setdefault('pickup', '')
-            cur.setdefault('dropoff', '')
-            cur.setdefault('wait_for_trigger', False)
-            cur['position'] = -1
-            cur['is_current'] = True
-            scheduled_with_current = [cur] + scheduled
-        return {
-            'scheduled': scheduled,
-            'scheduled_with_current': scheduled_with_current,
-            'queue_len': len(scheduled),
-            'current_task': cur,
-            'returning_home': bool(payload.get('returning_home', False)),
-            'docked': bool(payload.get('docked', False)),
-            'resume_after_charge': bool(payload.get('resume_after_charge', False)),
-        }
-
-    def _fetch_tasks_now(self) -> dict:
-        res = self._call(self.cli_list, ListTasks.Request(), timeout=2.0)
-        raw = {}
-        try:
-            raw = json.loads(res.tasks_json or '{}')
-        except Exception as e:
-            self.get_logger().warn(f"list_tasks JSON parse error: {e}")
-            raw = {}
-        return self._normalize_tasks_payload(raw)
-
-    def _get_tasks_snapshot(self, force=False) -> dict:
-        now = time.time()
-        with self._tasks_lock:
-            stale = (now - self._tasks_cache['ts']) > self._tasks_ttl
-            if force or stale:
-                try:
-                    fresh = self._fetch_tasks_now()
-                    sig = json.dumps(fresh, sort_keys=True, separators=(',',':'))
-                    if sig != self._tasks_cache['_sig']:
-                        self._tasks_cache.update(fresh)
-                        self._tasks_cache['rev'] = int(self._tasks_cache['rev']) + 1
-                        self._tasks_cache['_sig'] = sig
-                    self._tasks_cache['ts'] = now
-                    self._tasks_cache.pop('error', None)
-                except Exception as e:
-                    self._tasks_cache['error'] = str(e)
-                    self._tasks_cache['ts'] = now
-            return {k:v for k,v in self._tasks_cache.items() if k not in ('_sig',)}
-
-    # ---------------- DASHBOARD SERVER (Task Manager + Robots UI on :5005) ----------------
-    def _start_dashboard_server(self):
-        # IMPORTANT: this package name must match where your web assets are installed
-        pkg_share = get_package_share_directory('rmf_manager_cloud')
-        base = os.path.join(pkg_share, 'web')
-        self.get_logger().info(f"Web assets (dashboard): {base}")
-
+    # ---------- web ----------
+    def _start_web(self):
         app = Flask(
             __name__,
-            template_folder=os.path.join(base, 'templates'),
-            static_folder=os.path.join(base, 'static'),
-            static_url_path='/static'
+            template_folder=os.path.join(self._web_dir(), "templates"),
+            static_folder=os.path.join(self._web_dir(), "static"),
+            static_url_path="/static",
         )
 
         @app.after_request
         def _nocache(resp):
-            resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-            resp.headers['Pragma'] = 'no-cache'
-            resp.headers['Expires'] = '0'
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
             return resp
 
-        @app.get('/')
+        @app.get("/")
         def index():
-            data = self._get_tasks_snapshot(force=True)
-            vertices = sorted(list(self.g.V.keys()))
-            home_id = 'station'
-            return render_template('index.html', data=data, vertices=vertices, home_id=home_id)
+            return render_template("viz.html", debug="true" if self.debug else "false")
 
-        @app.get('/api/tasks')
-        def api_tasks():
-            snap = self._get_tasks_snapshot(force=False)
-            r = make_response(jsonify(snap))
-            r.headers['Cache-Control'] = 'no-store'
-            return r
-
-        @app.get('/api/robots')
+        @app.get("/api/robots")
         def api_robots():
-            out = []
-            now = time.time()
-            for ns in self.namespaces:
-                s = self._z_states.get(ns)
-                pose = None; path = []
-                if s:
-                    pose = {'x': float(s.pose.x), 'y': float(s.pose.y), 'yaw': float(s.pose.theta)}
-                    path = [str(v) for v in s.path_vertices]
-                out.append({
-                    'ns': ns,
-                    'age': (now - self._z_last_heard[ns]) if self._z_last_heard[ns] else None,
-                    'pose': pose,
-                    'path': path,
+            rows = []
+            for ns, ent in self._robots.items():
+                s = ent.last_state
+                rows.append({
+                    "ns": ns or "/",
+                    "robot_name": getattr(s, "robot_name", ns) if s else ns,
+                    "map_name": getattr(s, "map_name", "") if s else "",
+                    "floor_name": getattr(s, "floor_name", "") if s else "",
+                    "mode_text": getattr(s, "mode_text", "") if s else "",
+                    "battery_pct": (float(getattr(s,"battery_pct", float("nan"))) if s else float("nan")),
+                    "has_fix": bool(ent.has_fix),
+                    "lat": float(ent.lat) if math.isfinite(ent.lat) else None,
+                    "lon": float(ent.lon) if math.isfinite(ent.lon) else None,
+                    "alt": float(ent.alt) if math.isfinite(ent.alt) else None,
+                    "heading_deg": float(ent.heading_deg) if math.isfinite(ent.heading_deg) else None,
+                    "last_seen": ent.last_seen or 0.0,
                 })
-            return jsonify(out)
+            return jsonify({"robots": rows, "t": time.time()})
 
-        @app.get('/robots')
-        def robots_page():
-            return render_template('robots.html')
+        @app.get("/api/maps")
+        def api_maps():
+            out = []
+            for ns, meta in self._meta.items():
+                gr = self._georef.get(ns)
+                info = {
+                    "ns": ns or "/",
+                    "map_name": getattr(meta, "map_name", ""),
+                    "floor_name": getattr(meta, "floor_name", ""),
+                    "wcs_available": bool(gr.available) if gr else False,
+                    "overlay": None,
+                    "overlay_reason": None,
+                    "image_available": bool(self._img_png.get(ns) is not None),
+                    "image_url": f"/map_image/{ns.strip('/') or '_root'}" if self._img_png.get(ns) else "",
+                    "vertices": [],
+                    "edges": [],
+                }
+                # vertices → WGS84
+                try:
+                    v_ll = []
+                    for v in getattr(meta, "vertices", []):
+                        ll = self._vertex_latlon(ns, v)
+                        if ll:
+                            v_ll.append({"name": v.name, "lat": ll[0], "lon": ll[1], "id": int(getattr(v,"id",-1))})
+                    info["vertices"] = v_ll
+                except Exception as e:
+                    info["vertices_error"] = str(e)
 
-        @app.get('/api/status')
-        def api_status_for_dashboard():
-            ns = request.args.get('ns')
-            s = None
-            if ns and _norm_ns(ns) in self._z_states and self._z_states[_norm_ns(ns)] is not None:
-                s = self._z_states[_norm_ns(ns)]
-            else:
-                s = self._last_state
-            if not s:
-                return jsonify({'ok': False})
-            xpx, ypx = self.g.invert_tr(s.pose.x, s.pose.y)
-            return jsonify({'ok': True, 'x': xpx, 'y': ypx, 'yaw': s.pose.theta, 't': time.time()})
+                # edges → lines in WGS84
+                try:
+                    id_to_ll = {int(v["id"]): (v["lat"], v["lon"]) for v in info["vertices"] if "id" in v}
+                    edges = []
+                    for e in getattr(meta, "lanes", []):
+                        a = id_to_ll.get(int(getattr(e,"src_id", -1)))
+                        b = id_to_ll.get(int(getattr(e,"dst_id", -1)))
+                        if a and b:
+                            edges.append({"a": {"lat":a[0],"lon":a[1]}, "b": {"lat":b[0],"lon":b[1]}, "bidir": bool(getattr(e,"bidirectional",False))})
+                    info["edges"] = edges
+                except Exception as e:
+                    info["edges_error"] = str(e)
 
-        @app.get('/api/robot/<path:ns>/diagnostics')
-        def api_robot_diag(ns):
-            ns = _norm_ns(ns)
-            b = self._z_diag_text.get(ns)
-            if not b:
-                return Response('N/A', mimetype='text/plain')
-            try:
-                txt = b.decode('utf-8', errors='replace')
-            except Exception:
-                txt = b[:2048].hex()
-            return Response(txt, mimetype='text/plain')
+                ok, reason, bbox = self._image_bounds_latlon(ns)
+                if ok and bbox: info["overlay"] = {"bounds": bbox, "note": "axis-aligned bbox"}
+                else:           info["overlay_reason"] = reason
 
-        @app.get('/api/robot/<path:ns>/image')
-        def api_robot_image(ns):
-            ns = _norm_ns(ns)
-            b = self._z_image.get(ns)
-            if not b:
-                return ('', 404)
-            mime = _guess_image_mime(b)
-            if not mime:
-                return ('', 404)
-            return Response(b, mimetype=mime)
+                out.append(info)
+            return jsonify({"maps": out, "t": time.time()})
 
-        # ----- Original forms/actions -----
-        @app.post('/resume_after_charge')
-        def resume_after_charge():
-            enabled = 'enabled' in request.form
-            try:
-                req = SetResumeAfterCharge.Request(); req.enabled = bool(enabled)
-                self._call(self.cli_resume, req)
-            except Exception as e:
-                self.get_logger().warn(f"resume_after_charge: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/return_home')
-        def return_home():
-            msg = RobotCommand(); msg.type = 5; msg.robot_name = '*'
-            self.cmd_pub.publish(msg)
-            self._publish_command_zenoh(msg, ns=None)
-            return redirect(url_for('index'))
-
-        @app.post('/schedule/patrol')
-        def schedule_patrol():
-            wps = request.form.getlist('waypoints')
-            loops = int(request.form.get('loops','1') or 1)
-            position = request.form.get('position','bottom')
-            try:
-                req = SchedulePatrol.Request(); req.waypoints = wps; req.loops = loops; req.start_now = False
-                r = self._call(self.cli_patrol, req)
-                if position == 'top' and r.task_id:
-                    m = MoveTask.Request(); m.task_id = r.task_id; m.direction = 'top'; m.new_index = -1
-                    self._call(self.cli_move, m)
-            except Exception as e:
-                self.get_logger().warn(f"patrol: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/schedule/delivery')
-        def schedule_delivery():
-            pickup = request.form.get('pickup',''); dropoff = request.form.get('dropoff','')
-            wait_for_trigger = bool(request.form.get('wait_for_trigger'))
-            position = request.form.get('position','bottom')
-            try:
-                req = ScheduleDelivery.Request()
-                req.pickup = pickup; req.dropoff = dropoff; req.wait_for_trigger = wait_for_trigger
-                r = self._call(self.cli_deliv, req)
-                if position == 'top' and r.task_id:
-                    m = MoveTask.Request(); m.task_id = r.task_id; m.direction='top'; m.new_index=-1
-                    self._call(self.cli_move, m)
-            except Exception as e:
-                self.get_logger().warn(f"delivery: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/schedule/goto')
-        def schedule_goto():
-            goal = request.form.get('goal','')
-            position = request.form.get('position','bottom')
-            try:
-                req = ScheduleGoTo.Request(); req.goal = goal; req.start_now=False
-                r = self._call(self.cli_goto, req)
-                if position == 'top' and r.task_id:
-                    m = MoveTask.Request(); m.task_id = r.task_id; m.direction='top'; m.new_index=-1
-                    self._call(self.cli_move, m)
-            except Exception as e:
-                self.get_logger().warn(f"goto: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/cancel/<task_id>')
-        def cancel(task_id):
-            try:
-                req = CancelTask.Request(); req.task_id = task_id
-                self._call(self.cli_cancel, req)
-            except Exception as e:
-                self.get_logger().warn(f"cancel: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/cancel_all')
-        def cancel_all():
-            try:
-                self._call(self.cli_cancel_all, CancelAll.Request())
-            except Exception as e:
-                self.get_logger().warn(f"cancel_all: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/move/<task_id>/<direction>')
-        def move_dir(task_id, direction):
-            try:
-                req = MoveTask.Request(); req.task_id = task_id; req.direction = direction; req.new_index = -1
-                self._call(self.cli_move, req)
-            except Exception as e:
-                self.get_logger().warn(f"move_dir: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/reorder/<task_id>')
-        def reorder(task_id):
-            try:
-                idx = int(request.form.get('index','0') or 0)
-                req = MoveTask.Request(); req.task_id = task_id; req.direction = ''; req.new_index = idx
-                self._call(self.cli_move, req)
-            except Exception as e:
-                self.get_logger().warn(f"reorder: {e}")
-            return redirect(url_for('index'))
-
-        @app.post('/trigger/<task_id>/<stage>')
-        def trigger(task_id, stage):
-            try:
-                req = TriggerDelivery.Request(); req.task_id = task_id; req.stage = stage
-                self._call(self.cli_trigger, req)
-            except Exception as e:
-                self.get_logger().warn(f"trigger: {e}")
-            return redirect(url_for('index'))
-
-        def _serve():
-            self.get_logger().info(f"Dashboard (Task Manager + Robots): http://{self.ui_host}:{self.ui_port}")
-            serve(app, host=self.ui_host, port=self.ui_port, threads=8)
-        threading.Thread(target=_serve, daemon=True).start()
-
-    # ---------------- VISUALIZER SERVER (OSM on :8080) ----------------
-    def _start_viz_server(self):
-        pkg_share = get_package_share_directory('rmf_manager_cloud')
-        base = os.path.join(pkg_share, 'web')
-        tpl = os.path.join(base, 'templates', 'viz.html')
-        self.get_logger().info(f"Web assets (visualizer): {base}")
-        self.get_logger().info(f"Visualizer template exists={os.path.exists(tpl)} path={tpl}")
-
-        app = Flask(
-            __name__,
-            template_folder=os.path.join(base, 'templates'),
-            static_folder=os.path.join(base, 'static'),
-            static_url_path='/static'
-        )
-
-        @app.after_request
-        def _nocache(resp):
-            resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-            resp.headers['Pragma'] = 'no-cache'
-            resp.headers['Expires'] = '0'
+        @app.get("/map_image/<path:ns>")
+        def map_image(ns):
+            ns_key = "/" + ns.strip("/")
+            data = self._img_png.get(ns_key)
+            if not data: return ("", 404)
+            resp = make_response(data)
+            resp.headers["Content-Type"] = "image/png"
+            resp.headers["Cache-Control"] = "no-store"
             return resp
 
-        @app.get('/healthz')
-        def healthz():
-            return jsonify({'ok': True, 'ts': time.time()})
+        # --------- simple task controls (ns-scoped) ---------
+        def _nskey(ns_in: str) -> str:
+            return "/" + (ns_in or "").strip("/")
 
-        @app.get('/api/osm_defaults')
-        def api_osm_defaults():
-            return jsonify({
-                'lat': self.osm_default_lat,
-                'lon': self.osm_default_lon,
-                'zoom': self.osm_default_zoom
-            })
-
-        @app.get('/')
-        def viz_index():
-            return render_template('viz.html')
-
-        @app.get('/viz/image')
-        def viz_image():
-            if not self.g.image_path or not os.path.exists(self.g.image_path):
-                return ('', 404)
-            return send_file(self.g.image_path)
-
-        @app.get('/api/graph')
-        def api_graph():
-            verts = [{'name': n, 'x': v.xp, 'y': v.yp} for n, v in self.g.V.items()]
-            return jsonify({'vertices': verts, 'edges': self.E_as_px(), 'image_available': bool(self.g.image_path)})
-
-        # same edges helper (px space)
-        def _edge_dict(e):
-            return {'a': e['a'], 'b': e['b'], 'ax': e['ax'], 'ay': e['ay'], 'bx': e['bx'], 'by': e['by']}
-        def _edges_px():
-            return [_edge_dict(e) for e in self.g.E]
-        self.E_as_px = _edges_px
-
-        @app.get('/api/robots')
-        def api_robots():
-            out = []
-            now = time.time()
-            for ns in self.namespaces:
-                s = self._z_states.get(ns)
-                pose = None; path = []
-                if s:
-                    pose = {'x': float(s.pose.x), 'y': float(s.pose.y), 'yaw': float(s.pose.theta)}
-                    path = [str(v) for v in s.path_vertices]
-                out.append({
-                    'ns': ns,
-                    'age': (now - self._z_last_heard[ns]) if self._z_last_heard[ns] else None,
-                    'pose': pose,
-                    'path': path,
-                })
-            return jsonify(out)
-
-        @app.get('/api/status')
-        def api_status():
-            ns = request.args.get('ns')
-            s = None
-            if ns and _norm_ns(ns) in self._z_states and self._z_states[_norm_ns(ns)] is not None:
-                s = self._z_states[_norm_ns(ns)]
-            else:
-                s = self._last_state
-
-            if not s:
-                return jsonify({'ok': False})
-            xpx, ypx = self.g.invert_tr(s.pose.x, s.pose.y)
-            return jsonify({'ok': True, 'x': xpx, 'y': ypx, 'yaw': s.pose.theta, 't': time.time()})
-
-        @app.get('/api/path')
-        def api_path():
-            ns = request.args.get('ns')
-            s = None
-            if ns and _norm_ns(ns) in self._z_states and self._z_states[_norm_ns(ns)] is not None:
-                s = self._z_states[_norm_ns(ns)]
-            else:
-                s = self._last_state
-
-            if not s:
-                return jsonify({'path': [], 'seq': 0})
-            pts = []
-            for n in list(s.path_vertices):
-                if n in self.g.V:
-                    v = self.g.V[n]
-                    pts.append({'x': v.xp, 'y': v.yp, 'name': n})
-            return jsonify({'path': pts, 'seq': int(time.time()*1000), 't': time.time()})
-
-        # allow patrol scheduling from the viz origin (same-port POST)
-        @app.post('/api/schedule_patrol')
-        def viz_schedule_patrol():
+        @app.post("/api/<path:ns>/cancel_all")
+        def api_cancel_all(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
             try:
-                data = request.get_json(force=True, silent=True) or {}
-                wps = data.get('waypoints') or []
-                loops = int(data.get('loops') or 1)
-                position = str(data.get('position') or 'bottom')
-                if not isinstance(wps, list) or not wps:
-                    return jsonify({'ok': False, 'error': 'no waypoints'}), 400
-
-                req = SchedulePatrol.Request()
-                req.waypoints = [str(w) for w in wps]
-                req.loops = loops
-                req.start_now = False
-
-                r = self._call(self.cli_patrol, req)
-                task_id = getattr(r, 'task_id', '')
-
-                moved = False
-                warning = ""
-                if position == 'top' and task_id:
-                    try:
-                        if self.cli_move.wait_for_service(timeout_sec=0.25):
-                            m = MoveTask.Request()
-                            m.task_id = task_id
-                            m.direction = 'top'
-                            m.new_index = -1
-                            self._call(self.cli_move, m)
-                            moved = True
-                        else:
-                            warning = "move_task unavailable"
-                    except Exception as e:
-                        self.get_logger().warn(f"viz move_task: {e}")
-                        warning = str(e) or "move_task failed"
-
-                payload = {'ok': True, 'task_id': task_id, 'moved': moved}
-                if warning:
-                    payload['warning'] = warning
-                resp = make_response(jsonify(payload), 200)
-                resp.headers['Cache-Control'] = 'no-store'
-                return resp
+                cli = self._client(_nskey(ns), "cancel_all", CancelAll)
+                self._call(cli, CancelAll.Request(), timeout=6.0)
+                return jsonify({"ok": True})
             except Exception as e:
-                self.get_logger().warn(f"viz patrol: {e}")
-                return jsonify({'ok': False, 'error': str(e)}), 500
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        @app.post("/api/<path:ns>/patrol")
+        def api_patrol(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            body = request.get_json(silent=True) or {}
+            seq = body.get("sequence")
+            if not (isinstance(seq, list) and seq):
+                return jsonify({"ok": False, "error": "missing 'sequence' list"}), 400
+            try:
+                req = SchedulePatrol.Request()
+                # tolerant: support various field names
+                if hasattr(req, "waypoints"): req.waypoints = [str(x) for x in seq]
+                elif hasattr(req, "vertices"): req.vertices = [str(x) for x in seq]
+                else: return jsonify({"ok": False, "error": "SchedulePatrol has no waypoints/vertices field"}), 501
+                req.loops = int(body.get("loops", 1) or 1)
+                req.start_now = False
+                cli = self._client(_nskey(ns), "schedule_patrol", SchedulePatrol)
+                self._call(cli, req, timeout=8.0)
+                return jsonify({"ok": True})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        @app.post("/api/<path:ns>/return_home")
+        def api_return_home(ns):
+            if not self.cmd_pub:
+                return jsonify({"ok": False, "error": "RobotCommand publisher unavailable"}), 501
+            try:
+                msg = RobotCommand()
+                if hasattr(msg, "type"): msg.type = 5
+                if hasattr(msg, "robot_name"): msg.robot_name = "*"
+                self.cmd_pub.publish(msg)
+                return jsonify({"ok": True})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- path (per-ns) ---------
+        @app.get("/api/<path:ns>/path")
+        def api_path(ns):
+            ns = _nskey(ns)
+            st = self._robots.get(ns).last_state if self._robots.get(ns) else None
+            meta = self._meta.get(ns)
+            if not (st and meta):
+                return jsonify({"ok": False, "seq": self._path_seq.get(ns, 0), "points": []})
+            names = list(getattr(st, "path_vertices", []))
+            if names != self._last_path_names.get(ns, []):
+                self._path_seq[ns] = int(self._path_seq.get(ns, 0)) + 1
+                self._last_path_names[ns] = names
+            # name -> lat/lon lookup
+            # (build once per call; meta is small)
+            vmap = {}
+            for v in meta.vertices:
+                latlon = self._vertex_latlon(ns, v)
+                if latlon: vmap[str(v.name)] = {"lat": latlon[0], "lon": latlon[1]}
+            pts = [vmap[n] for n in names if n in vmap]
+            return jsonify({"ok": True, "seq": self._path_seq.get(ns, 0), "points": pts, "t": time.time()})
+
+        # Debug
+        @app.get("/__/snapshot")
+        def snapshot():
+            sn = {}
+            for ns, m in self._meta.items():
+                gr = self._georef.get(ns)
+                ok, reason, _ = self._image_bounds_latlon(ns)
+                sn[ns or "/"] = {
+                    "map": f"{getattr(m,'map_name','')}/{getattr(m,'floor_name','')}",
+                    "wcs_available": bool(gr.available) if gr else False,
+                    "image": bool(self._img_png.get(ns)),
+                    "img_wh": self._img_wh.get(ns, None),
+                    "overlay_ok": ok, "overlay_reason": reason
+                }
+            return jsonify(sn)
 
         def _serve():
-            self.get_logger().info(f"Visualizer (OSM): http://{self.ui_viz_host}:{self.ui_viz_port}")
-            serve(app, host=self.ui_viz_host, port=self.ui_viz_port, threads=8)
+            self.get_logger().info(f"UI: http://{self.ui_host}:{self.ui_port}")
+            serve(app, host=self.ui_host, port=self.ui_port, threads=8)
+
         threading.Thread(target=_serve, daemon=True).start()
 
+    def _web_dir(self) -> str:
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            return os.path.join(get_package_share_directory("rmf_manager_cloud"), "web")
+        except Exception:
+            return os.path.join(os.path.dirname(__file__), "..", "web")
+
+
+# ----- main -----
 
 def main():
-    if '--ros-domain-id' in sys.argv:
+    if "--ros-domain-id" in sys.argv:
         try:
-            i = sys.argv.index('--ros-domain-id')
+            i = sys.argv.index("--ros-domain-id")
             if i + 1 < len(sys.argv):
-                os.environ['ROS_DOMAIN_ID'] = str(int(sys.argv[i + 1]))
+                os.environ["ROS_DOMAIN_ID"] = str(int(sys.argv[i + 1]))
             del sys.argv[i:i+2]
         except Exception:
-            sys.argv = [a for a in sys.argv if a != '--ros-domain-id']
+            sys.argv = [a for a in sys.argv if a != "--ros-domain-id"]
 
     rclpy.init(args=sys.argv)
-    node = DashboardNode()
-
-    def _on_sigint(signum, frame):
-        try:
-            node.get_logger().info('SIGINT received, shutting down…')
-        except Exception:
-            pass
-        try:
-            if rclpy.ok():
-                rclpy.shutdown()
-        except RCLError:
-            pass
-        except Exception:
-            pass
-
-    signal.signal(signal.SIGINT, _on_sigint)
-
+    node = MultiRobotDashboard()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        try: node.destroy_node()
+        except Exception: pass
         try:
-            node.destroy_node()
-        except Exception:
-            pass
-        try:
-            if rclpy.ok():
-                rclpy.shutdown()
-        except RCLError:
-            pass
-        except Exception:
-            pass
+            if rclpy.ok(): rclpy.shutdown()
+        except Exception: pass
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
