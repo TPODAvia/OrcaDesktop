@@ -27,6 +27,7 @@
   <exec_depend>flask</exec_depend>
   <exec_depend>waitress</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

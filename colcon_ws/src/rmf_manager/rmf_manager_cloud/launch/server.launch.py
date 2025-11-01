@@ -1,22 +1,37 @@
 #!/usr/bin/env python3
-# Minimal launch: start the multi-robot RMF dashboard with inline params.
+# Launch RMF dashboard + Influx exporter + cam_noise_node (6 noisy cams to Influx)
 
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
+from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
+    influx_url     = LaunchConfiguration('influx_url')
+    influx_bucket  = LaunchConfiguration('influx_bucket')
+    influx_org     = LaunchConfiguration('influx_org')
+    influx_token   = LaunchConfiguration('influx_token')
+    robot_name     = LaunchConfiguration('robot_name')
+    influx_udp_port= LaunchConfiguration('influx_udp_port')  # for reference; node uses INFLUX_URL host:port and UDP 8094
+
     return LaunchDescription([
+        # ---- Launch args (edit defaults here or pass via CLI) ----
+        DeclareLaunchArgument('influx_url',      default_value='http://localhost:8086'),
+        DeclareLaunchArgument('influx_bucket',   default_value='rmf'),
+        DeclareLaunchArgument('influx_org',      default_value='org'),
+        DeclareLaunchArgument('influx_token',    default_value='token'),
+        DeclareLaunchArgument('robot_name',      default_value='vboxuser_Ubuntu22'),
+        DeclareLaunchArgument('influx_udp_port', default_value='8094'),
+
+        # ---- Original nodes (unchanged) ----
         Node(
             package='rmf_manager_cloud',
-            # If your setup installs an entrypoint named "dashboard_node" (no .py),
-            # change the next line to: executable='dashboard_node',
-            executable='cloud_server_node.py',
+            executable='cloud_server_node.py',  # if installed entrypoint exists, use: executable='dashboard_node'
             name='rmf_dashboard_multi',
             output='screen',
-            respawn=False,  # set True if you want it to auto-restart
+            respawn=False,
             arguments=['--ros-args', '--log-level', 'info'],
             parameters=[{
-                # ---- edit these defaults as you like ----
                 'ui_host': '0.0.0.0',
                 'ui_port': 5080,
                 'ui_viz_host': '0.0.0.0',
@@ -26,12 +41,28 @@ def generate_launch_description():
         ),
         Node(
             package='rmf_manager_cloud',
-            # If your setup installs an entrypoint named "dashboard_node" (no .py),
-            # change the next line to: executable='dashboard_node',
             executable='rmf_influx_exporter.py',
             name='rmf_influx_exporter',
             output='screen',
-            respawn=False,  # set True if you want it to auto-restart
+            respawn=False,
             arguments=['--ros-args', '--log-level', 'info'],
+        ),
+
+        # ---- Added cam_noise_node (publishes /multi_cam_snapshot + writes to Influx) ----
+        Node(
+            package='rmf_manager_cloud',
+            executable='cam_noise_node.py',          # if you run it as a .py script, use: 'cam_noise_node.py'
+            name='cam_noise',
+            output='screen',
+            respawn=False,
+            arguments=['--ros-args', '--log-level', 'info'],
+            # Pass configuration via environment variables expected by the node
+            # env={
+            #     'INFLUX_URL': influx_url,        # e.g., http://localhost:8086 (node uses host and UDP 8094)
+            #     'INFLUX_BUCKET': influx_bucket,  # rmf
+            #     'INFLUX_ORG': influx_org,        # org
+            #     'INFLUX_TOKEN': influx_token,    # token (unused for UDP, kept for parity)
+            #     'ROBOT_NAME': robot_name,        # vboxuser_Ubuntu22
+            # },
         ),
     ])

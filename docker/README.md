@@ -16,3 +16,20 @@ zenoh-cli sub -e tcp/HOST_A_IP:7447 '/vboxuser_Ubuntu22/**'
 
 sudo chown -R 472:472 ./grafana/data
 sudo chown -R 472:472 ./grafana/provisioning
+
+
+
+
+
+export INFLUX_TOKEN=replace_with_a_long_random_token
+curl -X POST "http://127.0.0.1:8086/api/v2/delete?org=orca&bucket=rmf" \
+  -H "Authorization: Token $INFLUX_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start":"1970-01-01T00:00:00Z",
+    "stop":"2100-01-01T00:00:00Z",
+    "predicate":""
+  }'
+
+
+  GST_DEBUG=2 ROS_DOMAIN_ID=1 ros2 launch rmf_manager_cloud server.launch.py

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # Multi-robot OSM view with vertices/lanes + optional raster overlay
-# - No vertex editing endpoints. UI only selects waypoints for patrol.
-# - Path endpoint returns current planned path in WGS84 for the active ns.
-# - Robust against publisher restarts (UI falls back to last good payloads).
+# - Discovers namespaces by /<ns>/rmf/state
+# - Eagerly creates service clients so they appear in `ros2 node info`
+# - Full task-control REST: list, patrol, goto, delivery, cancel(s), resume_after_charge, trigger
+# - Return-home via /rmf/command publisher
+# - Path endpoint returns current planned path in WGS84 for each ns
 
 import os, sys, math, time, json, threading
 from dataclasses import dataclass
@@ -28,9 +30,18 @@ try:
 except Exception:
     _HAS_CV = False
 
-# Optional services/publisher (best-effort)
+# Services + command publisher (best-effort import)
 try:
-    from rmf_manager_msgs.srv import SchedulePatrol, ScheduleGoTo, CancelAll
+    from rmf_manager_msgs.srv import (
+        SchedulePatrol,
+        ScheduleDelivery,
+        ScheduleGoTo,
+        CancelTask,
+        CancelAll,
+        ListTasks,
+        SetResumeAfterCharge,
+        TriggerDelivery,
+    )
     _HAS_SRVS = True
 except Exception:
     _HAS_SRVS = False
@@ -122,13 +133,13 @@ class MultiRobotDashboard(Node):
         self.image_overlay_enable = bool(self.declare_parameter("image_overlay_enable", True).get_parameter_value().bool_value)
         self.image_overlay_force_bbox = bool(self.declare_parameter("image_overlay_force_bbox", False).get_parameter_value().bool_value)
 
-        # QoS
+        # QoS (tolerant defaults; meta/img are best_effort to avoid stalls)
         self._qos_state = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                                      durability=DurabilityPolicy.VOLATILE, history=HistoryPolicy.KEEP_LAST)
         self._qos_meta  = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                                      durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
-        self._qos_img   = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
-                                     durability=DurabilityPolicy.VOLATILE, history=HistoryPolicy.KEEP_LAST)
+        self._qos_img   = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                     durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
 
         # Stores
         self._robots: Dict[str, RobotEntry] = {}
@@ -150,8 +161,8 @@ class MultiRobotDashboard(Node):
         else:
             self.cmd_pub = None
 
-        # Services cache
-        self._clients = {}
+        # Service clients cache (per-ns, eager) — avoid shadowing Node._clients
+        self._svc_clients: Dict[Tuple[str,str], object] = {}
 
         # Web + timers
         self._start_web()
@@ -197,6 +208,50 @@ class MultiRobotDashboard(Node):
             self._robots[ns] = RobotEntry(ns=ns)
         self._known_ns[ns] = subs
 
+        # Eagerly create service clients so they appear immediately in `ros2 node info`
+        self._prime_service_clients(ns)
+
+    # ---------- service client management ----------
+    def _prime_service_clients(self, ns: str):
+        if not _HAS_SRVS:
+            return
+        services = [
+            ("schedule_patrol",          SchedulePatrol),
+            ("schedule_delivery",        ScheduleDelivery),
+            ("schedule_goto",            ScheduleGoTo),
+            ("cancel_task",              CancelTask),
+            ("cancel_all",               CancelAll),
+            ("list_tasks",               ListTasks),
+            ("set_resume_after_charge",  SetResumeAfterCharge),
+            ("trigger_delivery",         TriggerDelivery),
+        ]
+        for name, typ in services:
+            key = (ns, name)
+            if key in self._svc_clients:
+                continue
+            full = f"{ns}/{name}" if ns else f"/{name}"
+            self._svc_clients[key] = self.create_client(typ, full)
+
+    def _client(self, ns: str, srv_name: str, srv_type):
+        key = (ns, srv_name)
+        cli = self._svc_clients.get(key)
+        if cli is None:
+            full = f"{ns}/{srv_name}" if ns else f"/{srv_name}"
+            cli = self.create_client(srv_type, full)
+            self._svc_clients[key] = cli
+        return cli
+
+    def _call(self, cli, req, timeout=8.0):
+        if not cli.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError("service unavailable")
+        fut = cli.call_async(req)
+        t0 = time.time()
+        while rclpy.ok() and (time.time() - t0) < timeout:
+            if fut.done():
+                return fut.result()
+            time.sleep(0.01)
+        raise RuntimeError("service timeout")
+
     # ---------- ROS callbacks ----------
     def _on_state(self, ns: str, msg: RobotState):
         ent = self._robots.get(ns) or RobotEntry(ns=ns)
@@ -208,7 +263,6 @@ class MultiRobotDashboard(Node):
     def _on_meta(self, ns: str, msg: MapMetadata):
         self._meta[ns] = msg
         self._georef[ns] = GeoRef.from_meta(msg)
-        # reset path seq for this ns on map change
         self._last_path_names[ns] = []
         self._path_seq[ns] = 0
         self.get_logger().info(
@@ -309,26 +363,6 @@ class MultiRobotDashboard(Node):
         lons = [p[1] for p in pts_ll]
         return (True, "ok", [[min(lats), min(lons)], [max(lats), max(lons)]])
 
-    # ---------- services / helpers ----------
-    def _client(self, ns: str, srv_name: str, srv_type):
-        key = (ns, srv_name)
-        cli = self._clients.get(key)
-        if cli is None:
-            full = f"{ns}/{srv_name}" if ns else f"/{srv_name}"
-            cli = self.create_client(srv_type, full)
-            self._clients[key] = cli
-        return cli
-
-    def _call(self, cli, req, timeout=8.0):
-        if not cli.wait_for_service(timeout_sec=timeout):
-            raise RuntimeError("service unavailable")
-        fut = cli.call_async(req)
-        t0 = time.time()
-        while rclpy.ok() and (time.time() - t0) < timeout:
-            if fut.done(): return fut.result()
-            time.sleep(0.01)
-        raise RuntimeError("service timeout")
-
     # ---------- web ----------
     def _start_web(self):
         app = Flask(
@@ -428,10 +462,91 @@ class MultiRobotDashboard(Node):
             resp.headers["Cache-Control"] = "no-store"
             return resp
 
-        # --------- simple task controls (ns-scoped) ---------
+        # --------- helpers ----------
         def _nskey(ns_in: str) -> str:
             return "/" + (ns_in or "").strip("/")
 
+        # --------- REST: tasks/list ----------
+        @app.get("/api/<path:ns>/tasks")
+        def api_tasks(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            try:
+                cli = self._client(_nskey(ns), "list_tasks", ListTasks)
+                res = self._call(cli, ListTasks.Request(), timeout=6.0)
+                payload = {}
+                try:
+                    payload = json.loads(getattr(res, "tasks_json", "{}") or "{}")
+                except Exception as e:
+                    payload = {"parse_error": str(e), "raw": getattr(res, "tasks_json", "")}
+                return jsonify({"ok": True, "tasks": payload})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- REST: schedule patrol ----------
+        @app.post("/api/<path:ns>/patrol")
+        def api_patrol(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            body = request.get_json(silent=True) or {}
+            seq = body.get("sequence")
+            if not (isinstance(seq, list) and seq):
+                return jsonify({"ok": False, "error": "missing 'sequence' list"}), 400
+            try:
+                req = SchedulePatrol.Request()
+                if hasattr(req, "waypoints"): req.waypoints = [str(x) for x in seq]
+                elif hasattr(req, "vertices"): req.vertices = [str(x) for x in seq]
+                else: return jsonify({"ok": False, "error": "SchedulePatrol has no waypoints/vertices field"}), 501
+                req.loops = int(body.get("loops", 1) or 1)
+                if hasattr(req, "start_now"): req.start_now = False
+                cli = self._client(_nskey(ns), "schedule_patrol", SchedulePatrol)
+                res = self._call(cli, req, timeout=8.0)
+                return jsonify({"ok": True, "task_id": getattr(res, "task_id", "")})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- REST: schedule goto ----------
+        @app.post("/api/<path:ns>/goto")
+        def api_goto(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            body = request.get_json(silent=True) or {}
+            goal = str(body.get("goal", "")).strip()
+            if not goal:
+                return jsonify({"ok": False, "error": "missing 'goal'"}), 400
+            try:
+                req = ScheduleGoTo.Request()
+                if hasattr(req, "goal"): req.goal = goal
+                if hasattr(req, "start_now"): req.start_now = bool(body.get("start_now", False))
+                cli = self._client(_nskey(ns), "schedule_goto", ScheduleGoTo)
+                res = self._call(cli, req, timeout=8.0)
+                return jsonify({"ok": True, "task_id": getattr(res, "task_id", "")})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- REST: schedule delivery ----------
+        @app.post("/api/<path:ns>/delivery")
+        def api_delivery(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            body = request.get_json(silent=True) or {}
+            pickup  = str(body.get("pickup", "")).strip()
+            dropoff = str(body.get("dropoff", "")).strip()
+            if not (pickup and dropoff):
+                return jsonify({"ok": False, "error": "missing 'pickup' or 'dropoff'"}), 400
+            try:
+                req = ScheduleDelivery.Request()
+                if hasattr(req, "pickup"):  req.pickup  = pickup
+                if hasattr(req, "dropoff"): req.dropoff = dropoff
+                if hasattr(req, "wait_for_trigger"):
+                    req.wait_for_trigger = bool(body.get("wait_for_trigger", False))
+                cli = self._client(_nskey(ns), "schedule_delivery", ScheduleDelivery)
+                res = self._call(cli, req, timeout=8.0)
+                return jsonify({"ok": True, "task_id": getattr(res, "task_id", "")})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- REST: cancel all ----------
         @app.post("/api/<path:ns>/cancel_all")
         def api_cancel_all(ns):
             if not _HAS_SRVS:
@@ -443,28 +558,52 @@ class MultiRobotDashboard(Node):
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)}), 500
 
-        @app.post("/api/<path:ns>/patrol")
-        def api_patrol(ns):
+        # --------- REST: cancel specific task ----------
+        @app.post("/api/<path:ns>/cancel/<task_id>")
+        def api_cancel(ns, task_id):
             if not _HAS_SRVS:
                 return jsonify({"ok": False, "error": "services unavailable"}), 501
-            body = request.get_json(silent=True) or {}
-            seq = body.get("sequence")
-            if not (isinstance(seq, list) and seq):
-                return jsonify({"ok": False, "error": "missing 'sequence' list"}), 400
             try:
-                req = SchedulePatrol.Request()
-                # tolerant: support various field names
-                if hasattr(req, "waypoints"): req.waypoints = [str(x) for x in seq]
-                elif hasattr(req, "vertices"): req.vertices = [str(x) for x in seq]
-                else: return jsonify({"ok": False, "error": "SchedulePatrol has no waypoints/vertices field"}), 501
-                req.loops = int(body.get("loops", 1) or 1)
-                req.start_now = False
-                cli = self._client(_nskey(ns), "schedule_patrol", SchedulePatrol)
-                self._call(cli, req, timeout=8.0)
+                req = CancelTask.Request()
+                if hasattr(req, "task_id"): req.task_id = str(task_id)
+                cli = self._client(_nskey(ns), "cancel_task", CancelTask)
+                self._call(cli, req, timeout=6.0)
                 return jsonify({"ok": True})
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)}), 500
 
+        # --------- REST: resume after charge toggle ----------
+        @app.post("/api/<path:ns>/resume_after_charge")
+        def api_resume_after_charge(ns):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            body = request.get_json(silent=True) or {}
+            enabled = bool(body.get("enabled", True))
+            try:
+                req = SetResumeAfterCharge.Request()
+                if hasattr(req, "enabled"): req.enabled = enabled
+                cli = self._client(_nskey(ns), "set_resume_after_charge", SetResumeAfterCharge)
+                self._call(cli, req, timeout=6.0)
+                return jsonify({"ok": True})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- REST: trigger delivery stage ----------
+        @app.post("/api/<path:ns>/trigger/<task_id>/<stage>")
+        def api_trigger(ns, task_id, stage):
+            if not _HAS_SRVS:
+                return jsonify({"ok": False, "error": "services unavailable"}), 501
+            try:
+                req = TriggerDelivery.Request()
+                if hasattr(req, "task_id"): req.task_id = str(task_id)
+                if hasattr(req, "stage"):   req.stage   = str(stage)
+                cli = self._client(_nskey(ns), "trigger_delivery", TriggerDelivery)
+                self._call(cli, req, timeout=6.0)
+                return jsonify({"ok": True})
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        # --------- REST: return home (RobotCommand) ----------
         @app.post("/api/<path:ns>/return_home")
         def api_return_home(ns):
             if not self.cmd_pub:
@@ -478,11 +617,12 @@ class MultiRobotDashboard(Node):
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)}), 500
 
-        # --------- path (per-ns) ---------
+        # --------- REST: path (per-ns) ----------
         @app.get("/api/<path:ns>/path")
         def api_path(ns):
             ns = _nskey(ns)
-            st = self._robots.get(ns).last_state if self._robots.get(ns) else None
+            ent = self._robots.get(ns)
+            st = ent.last_state if ent else None
             meta = self._meta.get(ns)
             if not (st and meta):
                 return jsonify({"ok": False, "seq": self._path_seq.get(ns, 0), "points": []})
@@ -491,7 +631,6 @@ class MultiRobotDashboard(Node):
                 self._path_seq[ns] = int(self._path_seq.get(ns, 0)) + 1
                 self._last_path_names[ns] = names
             # name -> lat/lon lookup
-            # (build once per call; meta is small)
             vmap = {}
             for v in meta.vertices:
                 latlon = self._vertex_latlon(ns, v)
@@ -499,7 +638,7 @@ class MultiRobotDashboard(Node):
             pts = [vmap[n] for n in names if n in vmap]
             return jsonify({"ok": True, "seq": self._path_seq.get(ns, 0), "points": pts, "t": time.time()})
 
-        # Debug
+        # Debug snapshot
         @app.get("/__/snapshot")
         def snapshot():
             sn = {}

@@ -6,6 +6,7 @@ find_package(ament_cmake REQUIRED)
 # Install the Python node as an executable script (no setup.py as requested)
 install(PROGRAMS
   scripts/cloud_server_node.py
+  scripts/cam_noise_node.py
   scripts/rmf_influx_exporter.py
   DESTINATION lib/${PROJECT_NAME}
 )

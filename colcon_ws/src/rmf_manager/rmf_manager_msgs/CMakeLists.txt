@@ -6,6 +6,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -15,6 +16,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Edge2D.msg"
   "msg/Vertex2D.msg"
   "msg/MapMetadata.msg"
+  "msg/MultiCamSnapshot.msg"
   "srv/LoadMap.srv"
   "srv/SchedulePatrol.srv"
   "srv/ScheduleDelivery.srv"
@@ -25,7 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetResumeAfterCharge.srv"
   "srv/TriggerDelivery.srv"
   "srv/MoveTask.srv"
-  DEPENDENCIES std_msgs nav_msgs geometry_msgs builtin_interfaces
+  DEPENDENCIES builtin_interfaces std_msgs geometry_msgs sensor_msgs nav_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)

@@ -10,7 +10,14 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous" defer></script>
 
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        /* dynamic sizing controlled by JS */
+        --v-label-font-size: 15px; /* vertex label size (scaled by slider) */
+        --v-label-pad-v: 4px;
+        --v-label-pad-h: 8px;
+      }
+
       html, body { height:100%; margin:0; }
       body { background:#0f1115; color:#e6edf3; font:14px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
 
@@ -33,11 +40,13 @@
       }
       .leaflet-tooltip.robot-label { box-shadow:none; }
 
-      /* Vertex label (match original feel) */
+      /* Vertex label (grows with --v-label-font-size) */
       .leaflet-tooltip.v-label {
         background: rgba(0,0,0,.58);
         color:#f8fafc; border:1px solid #2a3240; border-radius:6px;
-        font-weight:600; padding:2px 6px;
+        font-weight:700;
+        padding: var(--v-label-pad-v) var(--v-label-pad-h);
+        font-size: var(--v-label-font-size);
       }
 
       /* Bottom bar */
@@ -45,8 +54,8 @@
         position:fixed; left:8px; bottom:8px; z-index:9999; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
         background:#11161f; border:1px solid #2a3240; padding:6px 8px; border-radius:8px; font-size:12px;
       }
-      #opacity { width:120px; }
-      button, select {
+      #opacity, #size { width:120px; }
+      button, select, input[type="range"] {
         padding:6px 10px; border-radius:8px; background:#263143; color:#e6edf3; border:1px solid #39465a; cursor:pointer;
       }
       button:hover { filter:brightness(1.1); }
@@ -88,8 +97,14 @@
       <button id="btnClearSel" type="button">Clear</button>
       <button id="btnCancelAll" type="button">Cancel all</button>
       <button id="btnReturnHome" type="button">Return home</button>
+
       <span class="badge">overlay α</span>
       <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.5"/>
+
+      <span class="badge">size</span>
+      <input id="size" type="range" min="0.6" max="2.5" step="0.1" value="1.4"/>
+      <span id="sizeVal" class="pill">x1.4</span>
+
       <button id="btnCenterMap" type="button">Center</button>
     </div>
 
@@ -112,13 +127,33 @@
       function setStatus(s){ const el=document.getElementById('status'); if(el) el.textContent=s; }
       function showToast(msg, ms=1600){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(showToast._t); showToast._t=setTimeout(()=>t.style.display='none', ms); }
 
+      // ----- Sizing config (scaled at runtime) -----
+      const BASE = Object.freeze({
+        VERTEX_RADIUS: 6.5,       // bigger default vertex dot
+        VERTEX_STROKE: 2,         // vertex outline thickness
+        EDGE_WEIGHT:   3,         // graph edge thickness
+        PATH_WEIGHT:   6,         // robot planned path thickness
+        LABEL_FONT_PX: 15         // vertex label font size
+      });
+      let SIZE_SCALE = 1.4;       // default UI slider value
+
+      function sizes(){
+        return {
+          VERTEX_RADIUS: Math.max(2, Math.round(BASE.VERTEX_RADIUS * SIZE_SCALE)),
+          VERTEX_STROKE: Math.max(1, Math.round(BASE.VERTEX_STROKE * SIZE_SCALE)),
+          EDGE_WEIGHT:   Math.max(1, Math.round(BASE.EDGE_WEIGHT * SIZE_SCALE)),
+          PATH_WEIGHT:   Math.max(2, Math.round(BASE.PATH_WEIGHT * SIZE_SCALE)),
+          LABEL_FONT_PX: Math.max(10, Math.round(BASE.LABEL_FONT_PX * SIZE_SCALE))
+        };
+      }
+
       let map, tiles;
 
       // robots
       const markers = new Map();
 
       // overlays per (ns|map|floor)
-      const overlayGroups = new Map(); // key -> {img, verts, edges, path}
+      const overlayGroups = new Map(); // key -> {img, verts, edges}
       let overlayAlpha = 0.5;
 
       // degraded caches
@@ -172,7 +207,7 @@
       function getOverlayGroup(key){
         let g = overlayGroups.get(key);
         if(!g){
-          g = { img:null, verts: L.layerGroup().addTo(map), edges: L.layerGroup().addTo(map), path: null };
+          g = { img:null, verts: L.layerGroup().addTo(map), edges: L.layerGroup().addTo(map) };
           overlayGroups.set(key, g);
         }
         return g;
@@ -182,7 +217,6 @@
         if(g.img){ try{ map.removeLayer(g.img); }catch{} g.img = null; }
         try{ g.verts.clearLayers(); }catch{}
         try{ g.edges.clearLayers(); }catch{}
-        if(g.path){ try{ map.removeLayer(g.path); }catch{} g.path = null; }
       }
 
       function applyOverlayAlpha(){
@@ -193,12 +227,17 @@
 
       function latlon(pt){ return [pt.lat, pt.lon]; }
 
-      function styleVertexMarker(marker, selected){
+      function styleVertexMarker(marker, isSelected){
         if(!marker) return;
-        if(selected){
-          marker.setStyle({ color:'#064e3b', weight:1.6, fillColor:'#22c55e', fillOpacity:1 });
-        }else{
-          marker.setStyle({ color:'#0b0f18', weight:1, fillColor:'#f59e0b', fillOpacity:1 });
+        const S = sizes();
+        marker.setStyle({
+          color: isSelected ? '#064e3b' : '#0b0f18',
+          weight: S.VERTEX_STROKE,
+          fillColor: isSelected ? '#22c55e' : '#f59e0b',
+          fillOpacity: 1
+        });
+        if (typeof marker.setRadius === 'function') {
+          marker.setRadius(S.VERTEX_RADIUS);
         }
       }
 
@@ -284,6 +323,7 @@
         const overlayBounds = [];
         const vertexPts = [];
         const nsSet = new Set();
+        const S = sizes();
 
         nameToVertexMarker.clear();
 
@@ -297,20 +337,26 @@
           const g = getOverlayGroup(key);
           clearOverlayGroup(g);
 
-          // edges (original style: soft blue)
+          // edges (soft blue, scaled weight)
           if(Array.isArray(m.edges)){
             for(const e of m.edges){
               const pts = [latlon(e.a), latlon(e.b)];
-              L.polyline(pts, { weight:1.5, opacity:0.45, color:'#78a6ff' }).addTo(g.edges);
+              L.polyline(pts, { weight:S.EDGE_WEIGHT, opacity:0.45, color:'#78a6ff' }).addTo(g.edges);
               vertexPts.push(...pts);
             }
           }
 
-          // vertices (original style: orange dot + right label)
+          // vertices (orange dot + right label)
           if(Array.isArray(m.vertices)){
             for(const v of m.vertices){
               const ll = [v.lat, v.lon];
-              const cm = L.circleMarker(ll, { radius:3.8, weight:1, color:'#0b0f18', fillColor:'#f59e0b', fillOpacity:1 });
+              const cm = L.circleMarker(ll, {
+                radius: S.VERTEX_RADIUS,
+                weight: S.VERTEX_STROKE,
+                color:'#0b0f18',
+                fillColor:'#f59e0b',
+                fillOpacity:1
+              });
               cm.bindTooltip(`${v.name}`, { permanent:true, direction:'right', offset:[10,-10], className:'v-label' });
               cm.on('click', (ev) => {
                 if (ev.originalEvent && (ev.originalEvent.ctrlKey || ev.originalEvent.metaKey)) {
@@ -394,17 +440,44 @@
           if(j.seq === prev) return; // unchanged
           lastPathSeq.set(ns, j.seq);
 
-          // draw/update path layer (original style: green polyline)
+          // draw/update path layer (thick green polyline)
           let layer = pathLayers.get(ns);
           const latlngs = (j.points || []).map(p => [p.lat, p.lon]);
+          const S = sizes();
           if(!layer){
-            layer = L.polyline(latlngs, { color:'#22c55e', weight:3, opacity:0.95 });
+            layer = L.polyline(latlngs, { color:'#22c55e', weight:S.PATH_WEIGHT, opacity:0.95 });
             pathLayers.set(ns, layer);
             layer.addTo(map);
           }else{
             layer.setLatLngs(latlngs);
+            layer.setStyle({ weight:S.PATH_WEIGHT });
           }
         }catch(e){ /* ignore */ }
+      }
+
+      // Apply scale to existing layers (edges, vertices, labels, path)
+      function applyScaleToScene(){
+        const S = sizes();
+        // Update label font size via CSS var
+        document.documentElement.style.setProperty('--v-label-font-size', `${S.LABEL_FONT_PX}px`);
+
+        // Edges & vertices
+        for(const g of overlayGroups.values()){
+          try {
+            for(const l of g.edges.getLayers()) l.setStyle({ weight: S.EDGE_WEIGHT });
+          } catch {}
+          try {
+            for(const m of g.verts.getLayers()){
+              if (typeof m.setRadius === 'function') m.setRadius(S.VERTEX_RADIUS);
+              m.setStyle({ weight: S.VERTEX_STROKE });
+            }
+          } catch {}
+        }
+
+        // Paths
+        for(const layer of pathLayers.values()){
+          try { layer.setStyle({ weight: S.PATH_WEIGHT }); } catch {}
+        }
       }
 
       async function tick(){
@@ -415,7 +488,7 @@
         ]);
 
         if(robotsOk){ lastGoodRobots = robotsJ; updateRobots(robotsJ.robots || []); } else { updateRobots(lastGoodRobots.robots || []); }
-        if(mapsOk){ lastGoodMaps = mapsJ; updateMaps(mapsJ); } else { updateMaps(lastGoodMaps); }
+        if(mapsOk){ lastGoodMaps = mapsJ; updateMaps(mapsJ); applyScaleToScene(); } else { updateMaps(lastGoodMaps); applyScaleToScene(); }
 
         // update path for active ns
         if(activeNs) fetchPathFor(activeNs);
@@ -426,7 +499,22 @@
       window.addEventListener('load', ()=>{
         createMap();
 
-        document.getElementById('opacity').addEventListener('input', (e)=>{ overlayAlpha = parseFloat(e.target.value || '0.5'); applyOverlayAlpha(); });
+        // overlay alpha
+        document.getElementById('opacity').addEventListener('input', (e)=>{
+          overlayAlpha = parseFloat(e.target.value || '0.5'); applyOverlayAlpha();
+        });
+
+        // sizing slider
+        const sizeEl = document.getElementById('size');
+        const sizeVal = document.getElementById('sizeVal');
+        const updateSize = ()=>{
+          SIZE_SCALE = parseFloat(sizeEl.value || '1.0');
+          sizeVal.textContent = `x${SIZE_SCALE.toFixed(1)}`;
+          applyScaleToScene();
+        };
+        sizeEl.addEventListener('input', updateSize);
+        updateSize();
+
         document.getElementById('btnCenterMap').addEventListener('click', ()=>{
           const overlayBounds=[], vertexPts=[];
           for(const m of (lastGoodMaps.maps || [])){

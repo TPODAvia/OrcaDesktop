@@ -1,0 +1,1254 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 50,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "vboxuser_Ubuntu22"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start:v.timeRangeStart, stop:v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_metrics}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r._field == \"battery_pct\") |> group(columns:[\"robot\"]) |> aggregateWindow(every:v.windowPeriod, fn:mean, createEmpty:false) |> map(fn:(r)=>({ r with _value: 100.0 * float(v:r._value) }))",
+          "refId": "A"
+        }
+      ],
+      "title": "Battery % over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "theta"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "radian"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start:v.timeRangeStart, stop:v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_metrics}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r._field == \"x\" or r._field == \"y\" or r._field == \"theta\") |> group(columns:[\"robot\",\"_field\"]) |> aggregateWindow(every:v.windowPeriod, fn:mean, createEmpty:false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Pose (x, y, theta)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "mps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 7
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start:v.timeRangeStart, stop:v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_metrics}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r._field == \"vehicle_speed\") |> group(columns:[\"robot\"]) |> aggregateWindow(every:v.windowPeriod, fn:mean, createEmpty:false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Vehicle speed",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 7
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start:v.timeRangeStart, stop:v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_metrics}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r._field == \"internal_temp\" or r._field == \"external_temp\") |> group(columns:[\"robot\",\"_field\"]) |> aggregateWindow(every:v.windowPeriod, fn:mean, createEmpty:false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Temperatures",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "pressurePa"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 7
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start:v.timeRangeStart, stop:v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_metrics}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r._field == \"barometer\") |> group(columns:[\"robot\"]) |> aggregateWindow(every:v.windowPeriod, fn:mean, createEmpty:false)",
+          "refId": "A"
+        }
+      ],
+      "title": "Barometer",
+      "type": "timeseries"
+    },
+    {
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 0,
+        "y": 13
+      },
+      "id": 200,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<img src=\"http://localhost:8000/cam0\" style=\"max-width:100%; height:auto; display:block;\">",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Cam 0",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 8,
+        "y": 13
+      },
+      "id": 201,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<img src=\"http://localhost:8000/cam1\" style=\"max-width:100%; height:auto; display:block;\">",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Cam 1",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 16,
+        "y": 13
+      },
+      "id": 202,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<img src=\"http://localhost:8000/cam2\" style=\"max-width:100%; height:auto; display:block;\">",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Cam 2",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "id": 203,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<img src=\"http://localhost:8000/cam3\" style=\"max-width:100%; height:auto; display:block;\">",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Cam 3",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 8,
+        "y": 25
+      },
+      "id": 204,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<img src=\"http://localhost:8000/cam4\" style=\"max-width:100%; height:auto; display:block;\">",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Cam 4",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      },
+      "id": 205,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<img src=\"http://localhost:8000/cam5\" style=\"max-width:100%; height:auto; display:block;\">",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Cam 5",
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "P951FEA4DE68E13C5"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "id": 222,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "<audio controls preload=\"none\" src=\"http://your-host:8000/audio.mp3\" style=\"width:100%\"></audio>\n",
+        "mode": "html"
+      },
+      "pluginVersion": "10.4.5",
+      "title": "Panel Title",
+      "type": "text"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 6,
+      "options": {
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showDebug": false,
+          "showMeasure": false,
+          "showScale": false,
+          "showZoom": true
+        },
+        "layers": [
+          {
+            "config": {
+              "style": {
+                "type": "carto"
+              }
+            },
+            "type": "base"
+          },
+          {
+            "config": {
+              "location": {
+                "latitudeField": "lat",
+                "longitudeField": "lon",
+                "mode": "coords"
+              },
+              "showLegend": true,
+              "style": {
+                "opacity": 0.9,
+                "size": 8
+              }
+            },
+            "name": "Robots",
+            "type": "data"
+          }
+        ],
+        "tooltip": {
+          "mode": "details"
+        },
+        "view": {
+          "allLayers": true,
+          "center": {
+            "lat": 55.7,
+            "lon": 37.6
+          },
+          "id": "auto",
+          "lat": 55.7,
+          "lon": 37.6,
+          "zoom": 8
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start:v.timeRangeStart, stop:v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_gps}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r._field == \"lat\" or r._field == \"lon\" or r._field == \"has_fix\" or r._field == \"heading_deg\") |> pivot(rowKey:[\"_time\",\"robot\"], columnKey:[\"_field\"], valueColumn:\"_value\") |> group(columns:[\"robot\"]) |> sort(columns:[\"_time\"], desc:true) |> limit(n:1) |> filter(fn:(r)=> exists r.lat and exists r.lon) |> filter(fn:(r)=> r.has_fix == 1 or r.has_fix == 1.0) |> map(fn:(r)=> ({ r with lat: float(v:r.lat), lon: float(v:r.lon) })) |> group(columns:[]) |> keep(columns:[\"_time\",\"robot\",\"lat\",\"lon\",\"heading_deg\",\"has_fix\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "GPS — Robots (last position)",
+      "type": "geomap"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "OK"
+                },
+                "1": {
+                  "text": "WARN"
+                },
+                "2": {
+                  "text": "ERROR"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 57
+      },
+      "id": 7,
+      "maxPerRow": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "10.4.5",
+      "repeat": "component",
+      "repeatDirection": "h",
+      "targets": [
+        {
+          "query": "from(bucket:\"${bucket}\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn:(r)=> r._measurement == \"${meas_status}\") |> filter(fn:(r)=> r.robot =~ /${robot:regex}/) |> filter(fn:(r)=> r.component == \"${component}\") |> filter(fn:(r)=> r._field == \"code\") |> group(columns:[\"robot\",\"component\"], mode:\"by\") |> last() |> map(fn:(r)=>({ r with _value: int(v:r._value) })) |> keep(columns:[\"_time\",\"_value\",\"robot\",\"component\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "$component",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "fillOpacity": 70,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "text": "OK"
+                },
+                "1": {
+                  "text": "WARN"
+                },
+                "2": {
+                  "text": "ERROR"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 75
+      },
+      "id": 8,
+      "options": {
+        "colWidth": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "rowHeight": 0.9,
+        "showValue": "auto",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "10.4.5",
+      "targets": [
+        {
+          "query": "from(bucket: \"${bucket}\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"${meas_status}\") |> filter(fn: (r) => r.robot =~ /${robot:regex}/) |> filter(fn: (r) => r.component =~ /${component:regex}/) |> filter(fn:(r)=> r._field == \"code\") |> group(columns:[\"robot\",\"component\"], mode:\"by\") |> aggregateWindow(every: ${status_every}, fn: last, createEmpty: false) |> map(fn:(r)=>({ r with _value: int(v:r._value) })) |> keep(columns: [\"_time\",\"_value\",\"robot\",\"component\"]) |> sort(columns:[\"_time\"])",
+          "refId": "A"
+        }
+      ],
+      "title": "Timeline",
+      "type": "status-history"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "rmf",
+    "robots",
+    "influxdb",
+    "flux",
+    "status-history",
+    "status-grid",
+    "gps",
+    "geomap",
+    "timeline",
+    "no-ns"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "influxdb-1",
+          "value": "bf1wv1eute70gf"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "InfluxDB",
+        "multi": false,
+        "name": "DS_INFLUXDB",
+        "options": [],
+        "query": "influxdb",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "hide": 2,
+        "label": "Bucket",
+        "name": "bucket",
+        "query": "rmf",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 2,
+        "label": "Metrics measurement",
+        "name": "meas_metrics",
+        "query": "rmf_robot_metrics",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 2,
+        "label": "GPS measurement",
+        "name": "meas_gps",
+        "query": "rmf_robot_gps",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 2,
+        "label": "Status measurement",
+        "name": "meas_status",
+        "query": "rmf_robot_status",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 2,
+        "label": "Info measurement",
+        "name": "meas_info",
+        "query": "rmf_robot_info",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 2,
+        "label": "Camera media measurement",
+        "name": "meas_cam_media",
+        "query": "rmf_cam_media",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "vboxuser_Ubuntu22"
+          ],
+          "value": [
+            "vboxuser_Ubuntu22"
+          ]
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUXDB}"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": true,
+        "label": "robot",
+        "multi": true,
+        "name": "robot",
+        "options": [],
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket:\"${bucket}\", tag:\"robot\", predicate:(r)=> r._measurement == \"${meas_metrics}\" or r._measurement == \"${meas_cam_media}\", start:-30d)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUXDB}"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": true,
+        "label": "map",
+        "multi": true,
+        "name": "map",
+        "options": [],
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket:\"${bucket}\", tag:\"map\", predicate:(r)=> r._measurement == \"${meas_metrics}\", start:-30d)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUXDB}"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": true,
+        "label": "floor",
+        "multi": true,
+        "name": "floor",
+        "options": [],
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket:\"${bucket}\", tag:\"floor\", predicate:(r)=> r._measurement == \"${meas_metrics}\", start:-30d)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUXDB}"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Component",
+        "multi": true,
+        "name": "component",
+        "options": [],
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket:\"${bucket}\", tag:\"component\", predicate:(r)=> r._measurement == \"${meas_status}\", start:-30d)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${DS_INFLUXDB}"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": true,
+        "label": "camera",
+        "multi": true,
+        "name": "camera",
+        "options": [],
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket:\"${bucket}\", tag:\"camera\", predicate:(r)=> r._measurement == \"${meas_cam_media}\", start:-30d)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "auto": false,
+        "auto_count": 30,
+        "auto_min": "10s",
+        "current": {
+          "selected": false,
+          "text": "10s",
+          "value": "10s"
+        },
+        "hide": 0,
+        "label": "status step",
+        "name": "status_every",
+        "options": [
+          {
+            "selected": false,
+            "text": "1s",
+            "value": "1s"
+          },
+          {
+            "selected": false,
+            "text": "2s",
+            "value": "2s"
+          },
+          {
+            "selected": false,
+            "text": "5s",
+            "value": "5s"
+          },
+          {
+            "selected": true,
+            "text": "10s",
+            "value": "10s"
+          },
+          {
+            "selected": false,
+            "text": "15s",
+            "value": "15s"
+          },
+          {
+            "selected": false,
+            "text": "30s",
+            "value": "30s"
+          },
+          {
+            "selected": false,
+            "text": "1m",
+            "value": "1m"
+          },
+          {
+            "selected": false,
+            "text": "2m",
+            "value": "2m"
+          },
+          {
+            "selected": false,
+            "text": "5m",
+            "value": "5m"
+          }
+        ],
+        "query": "1s,2s,5s,10s,15s,30s,1m,2m,5m",
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "interval"
+      },
+      {
+        "hide": 0,
+        "label": "Stream host",
+        "name": "stream_host",
+        "query": "127.0.0.1",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 0,
+        "label": "Stream port",
+        "name": "stream_port",
+        "query": "8000",
+        "skipUrlSync": false,
+        "type": "constant"
+      },
+      {
+        "hide": 0,
+        "label": "Stream path",
+        "name": "stream_path",
+        "query": "video_feed",
+        "skipUrlSync": false,
+        "type": "constant"
+      }
+    ]
+  },
+  "time": {
+    "from": "2025-11-01T13:18:05.281Z",
+    "to": "2025-11-01T13:19:47.007Z"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "RMF — RobotState (Heatmap→State Timeline, Grid, Metrics, GPS)",
+  "uid": "rmf-status-alt",
+  "version": 1,
+  "weekStart": ""
+}

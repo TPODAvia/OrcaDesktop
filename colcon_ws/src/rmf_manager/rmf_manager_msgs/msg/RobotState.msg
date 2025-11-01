@@ -30,8 +30,11 @@ uint8 mag_status
 uint8 gps_status
 uint8 screen_status
 uint8 camera_status
+uint8 audio_status
 uint8 cpu_status
 uint8 gpu_status
+uint8 ram_status
+uint8 memory_status
 uint8 network_status
 uint8 led_status
 uint8 odom_status
