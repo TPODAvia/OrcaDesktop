@@ -1,14 +1,14 @@
 {
   plugins: {
     ros2dds: {
-      domain: 41,
-      namespace: "/vboxuser_Ubuntu22",
+      domain: 1,
+      namespace: "/yhs_yhsros2",
       allow: {
-        publishers: [],
-        // subscribers: ["/rmf/state", "/chatter"],
-        subscribers: ["/rmf/state", "/rmf/event", "/gps/data" , "/imu/data_raw", "/map/2d_map", "/ip_cam/front/image_raw", "/tf", "/diagnostics"],
-        service_servers: [],
-        service_clients: [],
+        publishers: ["/yhs_yhsros2/rmf/command"],
+        // subscribers: ["/chatter"],
+        subscribers: ["/yhs_yhsros2/rmf/event", "/yhs_yhsros2/rmf/map_image/compressed", "/yhs_yhsros2/rmf/map_metadata", "/yhs_yhsros2/rmf/state"],
+        service_servers: [".*"],
+        service_clients: [".*"],
         action_servers: [],
         action_clients: []
       }
@@ -27,6 +27,19 @@
     multicast: {
       enabled: true,
       address: "224.0.0.224:5446"
+    }
+  },
+  transport: {
+    link: {
+      tx: {
+        queue: {
+          congestion_control: {
+            drop: {
+              wait_before_drop: 400000
+            }
+          }
+        }
+      }
     }
   }
 }

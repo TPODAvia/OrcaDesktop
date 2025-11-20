@@ -39,30 +39,24 @@ def generate_launch_description():
                 'viz_update_hz': 1.0,
             }],
         ),
-        Node(
-            package='rmf_manager_cloud',
-            executable='rmf_influx_exporter.py',
-            name='rmf_influx_exporter',
-            output='screen',
-            respawn=False,
-            arguments=['--ros-args', '--log-level', 'info'],
-        ),
+        # Node(
+        #     package='rmf_manager_cloud',
+        #     executable='rmf_influx_exporter.py',
+        #     name='rmf_influx_exporter',
+        #     output='screen',
+        #     respawn=False,
+        #     arguments=['--ros-args', '--log-level', 'info'],
+        # ),
 
         # ---- Added cam_noise_node (publishes /multi_cam_snapshot + writes to Influx) ----
-        Node(
-            package='rmf_manager_cloud',
-            executable='cam_noise_node.py',          # if you run it as a .py script, use: 'cam_noise_node.py'
-            name='cam_noise',
-            output='screen',
-            respawn=False,
-            arguments=['--ros-args', '--log-level', 'info'],
-            # Pass configuration via environment variables expected by the node
-            # env={
-            #     'INFLUX_URL': influx_url,        # e.g., http://localhost:8086 (node uses host and UDP 8094)
-            #     'INFLUX_BUCKET': influx_bucket,  # rmf
-            #     'INFLUX_ORG': influx_org,        # org
-            #     'INFLUX_TOKEN': influx_token,    # token (unused for UDP, kept for parity)
-            #     'ROBOT_NAME': robot_name,        # vboxuser_Ubuntu22
-            # },
-        ),
+        # Node(
+        #     package='rmf_manager_cloud',
+        #     # If your setup installs an entrypoint named "dashboard_node" (no .py),
+        #     # change the next line to: executable='dashboard_node',
+        #     executable='rmf_influx_exporter.py',
+        #     name='rmf_influx_exporter',
+        #     output='screen',
+        #     respawn=False,  # set True if you want it to auto-restart
+        #     arguments=['--ros-args', '--log-level', 'info'],
+        # ),
     ])

@@ -59,8 +59,8 @@ services:
         # RMW CycloneDDS (rosdep won't install RMW selection)
         apt-get install -y --no-install-recommends ros-$ROS_DISTRO-rmw-cyclonedds-cpp
         # Python deps via pip (from your package.xml)
-        python3 -m pip install --no-cache-dir pyyaml Flask waitress
-        sudo apt install -y ros-humble-cv-bridge python3-opencv
+        python3 -m pip install --no-cache-dir pyyaml Flask waitress influxdb_client
+        sudo apt install -y ros-humble-cv-bridge python3-opencv ros-humble-nav-msgs ros-humble-sensor-msgs
         # rosdep for ROS package dependencies in your workspace
         rosdep init || true
         rosdep update || true

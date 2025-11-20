@@ -19,13 +19,14 @@ from flask import Flask, jsonify, render_template, make_response, request
 from waitress import serve
 
 from rmf_manager_msgs.msg import RobotState, MapMetadata
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from geometry_msgs.msg import Quaternion
 
 # Optional cv2 encoder
 try:
     from cv_bridge import CvBridge
     import cv2
+    import numpy as np
     _HAS_CV = True
 except Exception:
     _HAS_CV = False
@@ -136,7 +137,7 @@ class MultiRobotDashboard(Node):
         # QoS (tolerant defaults; meta/img are best_effort to avoid stalls)
         self._qos_state = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
                                      durability=DurabilityPolicy.VOLATILE, history=HistoryPolicy.KEEP_LAST)
-        self._qos_meta  = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
+        self._qos_meta  = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                      durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
         self._qos_img   = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                      durability=DurabilityPolicy.TRANSIENT_LOCAL, history=HistoryPolicy.KEEP_LAST)
@@ -155,11 +156,16 @@ class MultiRobotDashboard(Node):
         self._path_seq: Dict[str, int] = {}
 
         # Optional command publisher
+        self._cmd_pubs = {}  # ns -> Publisher
         if _HAS_CMD:
-            qos_cmd = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
-            self.cmd_pub = self.create_publisher(RobotCommand, "/rmf/command", qos_cmd)
+            self._qos_cmd = QoSProfile(
+                depth=10,
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST
+            )
         else:
-            self.cmd_pub = None
+            self._qos_cmd = None
+
 
         # Service clients cache (per-ns, eager) — avoid shadowing Node._clients
         self._svc_clients: Dict[Tuple[str,str], object] = {}
@@ -190,9 +196,10 @@ class MultiRobotDashboard(Node):
     def _attach_ns(self, ns: str):
         s_topic = f"{ns}/rmf/state" if ns else "/rmf/state"
         m_topic = f"{ns}/rmf/map_metadata" if ns else "/rmf/map_metadata"
-        i_topic = f"{ns}/rmf/map_image" if ns else "/rmf/map_image"
+        i_topic = f"{ns}/rmf/map_image/compressed" if ns else "/rmf/map_image/compressed"
 
         self.get_logger().info(f"[discover] attach ns='{ns or '/'}'  state={s_topic} meta={m_topic} image={i_topic}")
+
 
         cb_ev = SubscriptionEventCallbacks(
             incompatible_qos=lambda info: self.get_logger().warn(
@@ -202,7 +209,7 @@ class MultiRobotDashboard(Node):
         subs = {}
         subs["state"] = self.create_subscription(RobotState, s_topic, lambda m,ns=ns:self._on_state(ns,m), self._qos_state, event_callbacks=cb_ev)
         subs["meta"]  = self.create_subscription(MapMetadata, m_topic, lambda m,ns=ns:self._on_meta(ns,m),  self._qos_meta,  event_callbacks=cb_ev)
-        subs["image"] = self.create_subscription(Image,       i_topic, lambda m,ns=ns:self._on_image(ns,m), self._qos_img,   event_callbacks=cb_ev)
+        subs["image"] = self.create_subscription(CompressedImage, i_topic, lambda m,ns=ns:self._on_image(ns,m), self._qos_img,   event_callbacks=cb_ev)
 
         if ns not in self._robots:
             self._robots[ns] = RobotEntry(ns=ns)
@@ -210,6 +217,11 @@ class MultiRobotDashboard(Node):
 
         # Eagerly create service clients so they appear immediately in `ros2 node info`
         self._prime_service_clients(ns)
+
+        if _HAS_CMD and self._qos_cmd is not None:
+            cmd_topic = f"{ns}/rmf/command" if ns else "/rmf/command"
+            self._cmd_pubs[ns] = self.create_publisher(RobotCommand, cmd_topic, self._qos_cmd)
+            self.get_logger().info(f"[discover] cmd publisher for ns='{ns or '/'}' -> {cmd_topic}")
 
     # ---------- service client management ----------
     def _prime_service_clients(self, ns: str):
@@ -265,23 +277,59 @@ class MultiRobotDashboard(Node):
         self._georef[ns] = GeoRef.from_meta(msg)
         self._last_path_names[ns] = []
         self._path_seq[ns] = 0
-        self.get_logger().info(
-            f"[meta] ns='{ns or '/'}' map={msg.map_name}/{msg.floor_name} wcs={self._georef[ns].available}"
-        )
 
-    def _on_image(self, ns: str, img: Image):
+        # 🔵 ЛОГИРУЕМ, ЧТО ПОЛУЧИЛИ МЕТАДАННЫЕ КАРТЫ
+        try:
+            v_count = len(getattr(msg, "vertices", []))
+            l_count = len(getattr(msg, "lanes", []))
+        except Exception:
+            v_count = l_count = -1
+
+        # self.get_logger().info(
+        #     f"[meta_cb] ns='{ns or '/'}' "
+        #     f"map={msg.map_name}/{msg.floor_name} "
+        #     f"vertices={v_count} lanes={l_count} "
+        #     f"wcs_available={self._georef[ns].available}"
+        # )
+
+    def _on_image(self, ns: str, img: CompressedImage):
+        # If OpenCV is unavailable, we can’t decode to get size → skip
         if not _HAS_CV or self._bridge is None:
+            self.get_logger().warn(
+                f"[image_cb] ns='{ns or '/'}' received image but OpenCV/CvBridge is unavailable"
+            )
             return
         try:
-            enc = 'mono8' if img.encoding in ('mono8','8UC1') else 'rgb8'
-            cv_img = self._bridge.imgmsg_to_cv2(img, desired_encoding=enc)
+            # img.data is JPEG (format usually "jpeg" or "jpg")
+            np_arr = np.frombuffer(img.data, dtype=np.uint8)
+            cv_img = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+            if cv_img is None:
+                raise RuntimeError("cv2.imdecode returned None")
+
             h, w = cv_img.shape[:2]
+
+            # 🔵 ЛОГИРУЕМ ФАКТ ПОЛУЧЕНИЯ ИЗОБРАЖЕНИЯ
+            self.get_logger().info(
+                f"[image_cb] ns='{ns or '/'}' got compressed image "
+                f"format={getattr(img, 'format', '')} size={w}x{h} bytes={len(img.data)}"
+            )
+
+            # Re-encode as PNG for the web endpoint
             ok, buf = cv2.imencode(".png", cv_img)
             if ok:
                 self._img_png[ns] = buf.tobytes()
                 self._img_wh[ns] = (w, h)
+
+                # ✅ Диагностика наложения overlay сразу после ПЕРВОГО кадра
+                ok_overlay, reason, bbox = self._image_bounds_latlon(ns)
+                self.get_logger().info(
+                    f"[image_cb] overlay ns='{ns or '/'}' ok={ok_overlay} "
+                    f"reason={reason} bbox={bbox}"
+                )
         except Exception as e:
-            self.get_logger().warn(f"[map_image] ns='{ns or '/'}' encode failed: {e}")
+            self.get_logger().warn(
+                f"[map_image/compressed] ns='{ns or '/'}' decode failed: {e}"
+            )
 
     # ---------- projection ----------
     def _tick_projection(self):
@@ -488,18 +536,61 @@ class MultiRobotDashboard(Node):
         def api_patrol(ns):
             if not _HAS_SRVS:
                 return jsonify({"ok": False, "error": "services unavailable"}), 501
+
             body = request.get_json(silent=True) or {}
             seq = body.get("sequence")
             if not (isinstance(seq, list) and seq):
                 return jsonify({"ok": False, "error": "missing 'sequence' list"}), 400
+
+            # --- build request as before ---
             try:
                 req = SchedulePatrol.Request()
-                if hasattr(req, "waypoints"): req.waypoints = [str(x) for x in seq]
-                elif hasattr(req, "vertices"): req.vertices = [str(x) for x in seq]
-                else: return jsonify({"ok": False, "error": "SchedulePatrol has no waypoints/vertices field"}), 501
-                req.loops = int(body.get("loops", 1) or 1)
-                if hasattr(req, "start_now"): req.start_now = False
-                cli = self._client(_nskey(ns), "schedule_patrol", SchedulePatrol)
+
+                field_name = None
+                if hasattr(req, "waypoints"):
+                    req.waypoints = [str(x) for x in seq]
+                    field_name = "waypoints"
+                elif hasattr(req, "vertices"):
+                    req.vertices = [str(x) for x in seq]
+                    field_name = "vertices"
+                else:
+                    return jsonify({"ok": False, "error": "SchedulePatrol has no waypoints/vertices field"}), 501
+
+                loops = int(body.get("loops", 1) or 1)
+                req.loops = loops
+
+                start_now_val = False
+                if hasattr(req, "start_now"):
+                    start_now_val = bool(body.get("start_now", False))
+                    req.start_now = start_now_val
+
+                # --- LOG: show equivalent terminal command ---
+                ns_key = _nskey(ns)      # e.g. "/yhs_yhsros2"
+                srv_name = f"{ns_key}/schedule_patrol"
+
+                seq_list_str = ", ".join(f"'{str(x)}'" for x in seq)
+
+                # yaml-ish payload
+                payload_parts = [f"{field_name}: [{seq_list_str}]", f"loops: {loops}"]
+                if hasattr(req, "start_now"):
+                    payload_parts.append(f"start_now: {str(start_now_val).lower()}")
+
+                payload_str = ", ".join(payload_parts)
+
+                self.get_logger().info(
+                    "\n[REST][patrol] scheduling patrol\n"
+                    f"  ns: {ns_key}\n"
+                    f"  sequence: {seq}\n"
+                    f"  loops: {loops}\n"
+                    f"  start_now: {start_now_val}\n"
+                    "  # Equivalent CLI:\n"
+                    f"  ros2 service call {srv_name} "
+                    "rmf_manager_msgs/srv/SchedulePatrol "
+                    f"\"{{{payload_str}}}\"\n"
+                )
+
+                # --- call service as before ---
+                cli = self._client(ns_key, "schedule_patrol", SchedulePatrol)
                 res = self._call(cli, req, timeout=8.0)
                 return jsonify({"ok": True, "task_id": getattr(res, "task_id", "")})
             except Exception as e:
@@ -606,15 +697,28 @@ class MultiRobotDashboard(Node):
         # --------- REST: return home (RobotCommand) ----------
         @app.post("/api/<path:ns>/return_home")
         def api_return_home(ns):
-            if not self.cmd_pub:
-                return jsonify({"ok": False, "error": "RobotCommand publisher unavailable"}), 501
+            # Normalize ns from the URL into the same form used in _attach_ns
+            ns_key = _nskey(ns)          # "/yhs_yhsros2" or "/"
+            ros_ns = "" if ns_key == "/" else ns_key
+
+            pub = self._cmd_pubs.get(ros_ns)
+            if not pub:
+                return jsonify({
+                    "ok": False,
+                    "error": f"RobotCommand publisher unavailable for ns '{ros_ns or '/'}'"
+                }), 501
+
             try:
                 msg = RobotCommand()
-                if hasattr(msg, "type"): msg.type = 5
-                if hasattr(msg, "robot_name"): msg.robot_name = "*"
-                self.cmd_pub.publish(msg)
+                if hasattr(msg, "type"):
+                    msg.type = 5            # your "return home" command code
+                if hasattr(msg, "robot_name"):
+                    msg.robot_name = "*"    # or a specific robot name if you want
+
+                pub.publish(msg)
                 return jsonify({"ok": True})
             except Exception as e:
+                self.get_logger().warn(f"[return_home] failed for ns='{ros_ns or '/'}': {e}")
                 return jsonify({"ok": False, "error": str(e)}), 500
 
         # --------- REST: path (per-ns) ----------

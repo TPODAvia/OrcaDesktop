@@ -12,5 +12,20 @@
       enabled: true,
       address: "224.0.0.224:5446"
     }
-  }
+  },
+
+    transport: {
+        link: {
+            tx: {
+            queue: {
+                congestion_control: {
+                drop: {
+                    // 400000 microseconds = 0.4 seconds
+                    wait_before_drop: 400000
+                }
+                }
+            }
+            }
+        }
+    }
 }
