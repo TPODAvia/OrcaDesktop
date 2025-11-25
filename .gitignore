@@ -3,3 +3,4 @@ install
 log
 docker/grafana/
 docker/influxdb/
+docker/cloud_appimage_build/

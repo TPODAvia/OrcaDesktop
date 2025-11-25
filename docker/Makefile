@@ -169,3 +169,22 @@ uninstall-hard:
 	else \
 	  echo '❎ Aborted.'; \
 	fi
+
+cloud:
+	@echo "▶ Ensuring ros2-cli container is running..."
+	@docker compose -f $(PROJECT_DIR)/docker-compose.yml up -d ros2_cli
+	@echo "▶ Starting RMF Cloud server inside ros2-cli..."
+	@docker exec -d ros2-cli bash -lc '\
+	  set -e; \
+	  source /opt/ros/$$ROS_DISTRO/setup.bash; \
+	  cd /root/colcon_ws; \
+	  if [ -f install/setup.bash ]; then source install/setup.bash; fi; \
+	  export ROS_DOMAIN_ID=1; \
+	  ros2 launch rmf_manager_cloud server.launch.py \
+	'
+	@echo "🌍 RMF Cloud server started (if no errors above)."
+
+cloud-stop:
+	@echo "🛑 Stopping RMF Cloud server..."
+	@docker exec -it ros2-cli pkill -f rmf_manager_cloud || true
+	@echo "🛑 Cloud server stopped."

@@ -121,14 +121,14 @@
         font-variant-numeric: tabular-nums;
       }
 
-      /* ---- Camera dock (bottom-right) ---- */
+      /* ---- Camera dock (top-right) ---- */
       #camDock {
         position: fixed;
         right: 12px;
-        bottom: 8px;
+        top: 60px;
         z-index: 9998;
         width: 320px;
-        max-height: 50%;
+        max-height: 60%;
         background: #11161f;
         border: 1px solid #2a3240;
         border-radius: 10px;
@@ -194,17 +194,27 @@
         line-height: 1;
       }
       .cam-slot-body {
-        aspect-ratio: 16 / 9;
+        position: relative;
         background: #050816;
         border-radius: 6px;
         overflow: hidden;
+
+        /* fixed 16:9 tile, independent of iframe internals */
+        padding-top: 56.25%;  /* 9 / 16 * 100% */
       }
+
       .cam-frame {
-        width: 100%;
-        height: 100%;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
         border: none;
-        display: block;
         cursor: pointer;
+
+        /* make sure the embedded page fully covers the tile */
+        min-width: 100%;
+        min-height: 100%;
+        box-sizing: border-box;
       }
 
       /* Fullscreen camera overlay */
@@ -263,8 +273,9 @@
 
       @media (max-width: 900px) {
         #camDock {
-          width: 260px;
-          max-height: 40%;
+          top: 52px;
+          width: 320px;
+          max-height: 50%;
         }
         #miniDash {
           display: none;
@@ -341,7 +352,7 @@
     <div id="camFullscreen" aria-label="Fullscreen camera">
       <div class="cam-full-inner">
         <button id="camFullClose" type="button">×</button>
-        <iframe id="camFullFrame" title="Fullscreen camera" allowfullscreen></iframe>
+        <iframe id="camFullFrame" title="Fullscreen camera" allowfullscreen scrolling="no"></iframe>
         <div id="camFullLabel"></div>
       </div>
     </div>
@@ -417,11 +428,20 @@
       let go2rtcBase = "";
       // two visible slots: index 0 and 1
       let activeCamSlots = [null, null]; // each: {ns, stream, label}
+      // snapshot of last camera config to avoid unnecessary reloads
+      let lastCamerasSnapshot = null;
 
       async function loadCameras(){
         try{
           const j = await fetchJSON('/api/cameras');
           if(j && j.ok !== false){
+            // only update UI when config/base_url actually changes
+            const snapshot = JSON.stringify([j.cameras || {}, j.base_url || ""]);
+            if (snapshot === lastCamerasSnapshot) {
+              return; // nothing changed, keep iframes running
+            }
+            lastCamerasSnapshot = snapshot;
+
             allCameras = j.cameras || {};
             go2rtcBase = j.base_url || "";
             log('cameras loaded', allCameras);
@@ -446,7 +466,23 @@
         const dock = document.getElementById('camDock');
         if(!dock) return;
 
-        const ns = activeNs || '/';
+        // Decide which namespace to show cameras for:
+        // 1) prefer activeNs
+        // 2) if it has no cameras, fall back to the first ns that *does* have cameras
+        const nsKeys = Object.keys(allCameras || {});
+        let ns = activeNs || '/';
+        if (!allCameras[ns] && nsKeys.length) {
+          // if "/" exists in camera map, prefer it, otherwise pick first key
+          ns = nsKeys.includes('/') ? '/' : nsKeys[0];
+          activeNs = ns;
+
+          // keep <select> in sync if present
+          const nsSel = document.getElementById('nsSelect');
+          if (nsSel && nsSel.value !== ns) {
+            nsSel.value = ns;
+          }
+        }
+
         const labelEl = document.getElementById('camNsLabel');
         if(labelEl) labelEl.textContent = ns;
 
@@ -529,12 +565,24 @@
           const closeBtn = document.querySelector(`button[data-slot-close="${i}"]`);
           if(!frame || !title || !closeBtn) continue;
 
+          frame.setAttribute('scrolling', 'no');
+          frame.style.overflow = 'hidden';
+
           if(!s){
-            frame.src = 'about:blank';
+            const blank = 'about:blank';
+            if (frame.dataset.currentSrc !== blank) {
+              frame.src = blank;
+              frame.dataset.currentSrc = blank;
+            }
             title.textContent = 'Empty';
             closeBtn.style.visibility = 'hidden';
           }else{
-            frame.src = go2rtcUrlForStream(s.stream);
+            const newUrl = go2rtcUrlForStream(s.stream);
+            if (frame.dataset.currentSrc !== newUrl) {
+              // only reload iframe if stream actually changed
+              frame.src = newUrl;
+              frame.dataset.currentSrc = newUrl;
+            }
             title.textContent = s.label;
             closeBtn.style.visibility = 'visible';
           }
@@ -990,8 +1038,6 @@
 
         if(robotsOk){ lastGoodRobots = robotsJ; updateRobots(robotsJ.robots || []); } else { updateRobots(lastGoodRobots.robots || []); }
         if(mapsOk){ lastGoodMaps = mapsJ; updateMaps(mapsJ); applyScaleToScene(); } else { updateMaps(lastGoodMaps); applyScaleToScene(); }
-        // camera panel depends on activeNs and known namespaces (from /api/maps)
-        refreshCameraUI();
         // update path for active ns
         if(activeNs) fetchPathFor(activeNs);
 
@@ -1001,7 +1047,9 @@
       window.addEventListener('load', ()=>{
         createMap();
         setupCameraDomInteractions();
+        // Cameras: independent poller (parallel to UI tick)
         loadCameras();
+        setInterval(loadCameras, 5000);   // every 5s; tune if needed
         // loops input for patrol
         const loopsInput = document.getElementById('loopsInput');
 
@@ -1034,7 +1082,6 @@
           if(!centerOnMaps(overlayBounds, vertexPts)) warn('center: nothing to fit');
         });
 
-        document.getElementById('nsSelect').addEventListener('change', (e)=>{ activeNs = e.target.value || '/'; });
         document.getElementById('nsSelect').addEventListener('change', (e)=>{ activeNs = e.target.value || '/'; refreshCameraUI(); });
 
 

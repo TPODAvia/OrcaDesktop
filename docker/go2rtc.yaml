@@ -3,18 +3,3 @@ streams:
   yhs_yhsros2_cam2: rtsp://admin:admin@89.113.6.17:20002/1
   yhs_yhsros2_cam3: rtsp://admin:admin@89.113.6.17:20003/1
   yhs_yhsros2_cam4: rtsp://admin:admin@89.113.6.17:20004/1
-
-cameras:
-  /yhs_yhsros2:
-    - id: front
-      stream: yhs_yhsros2_cam_front
-      label: Front
-    - id: rear
-      stream: yhs_yhsros2_cam_rear
-      label: Rear
-    - id: left
-      stream: yhs_yhsros2_cam_left
-      label: Left
-    - id: right
-      stream: yhs_yhsros2_cam_right
-      label: Right

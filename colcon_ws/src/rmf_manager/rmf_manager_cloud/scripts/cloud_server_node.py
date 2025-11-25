@@ -135,6 +135,13 @@ class MultiRobotDashboard(Node):
         self.image_overlay_enable = bool(self.declare_parameter("image_overlay_enable", True).get_parameter_value().bool_value)
         self.image_overlay_force_bbox = bool(self.declare_parameter("image_overlay_force_bbox", False).get_parameter_value().bool_value)
 
+        # Same value as map_image_downscale_factor in rmf_manager_bridge
+        # 0 < factor <= 1.0, 1.0 means no downscale
+        self.image_downscale_factor = float(
+            self.declare_parameter("map_image_downscale_factor", 1.0)
+                .get_parameter_value().double_value or 1.0
+        )
+
         # go2rtc integration (RTSP → WebRTC/HLS) for camera visualization
         # Path to go2rtc.yaml & optional explicit base URL (if empty, UI will assume same host:1984)
         self.go2rtc_config_path = self.declare_parameter(
@@ -163,6 +170,7 @@ class MultiRobotDashboard(Node):
         self._meta: Dict[str, MapMetadata] = {}
         self._img_png: Dict[str, bytes] = {}
         self._img_wh: Dict[str, Tuple[int,int]] = {}
+        self._img_rot: Dict[str, Dict[str, float]] = {}
         self._bridge = CvBridge() if _HAS_CV else None
 
         # Path change tracking
@@ -298,13 +306,13 @@ class MultiRobotDashboard(Node):
             l_count = len(getattr(msg, "lanes", []))
         except Exception:
             v_count = l_count = -1
-
-        # self.get_logger().info(
-        #     f"[meta_cb] ns='{ns or '/'}' "
-        #     f"map={msg.map_name}/{msg.floor_name} "
-        #     f"vertices={v_count} lanes={l_count} "
-        #     f"wcs_available={self._georef[ns].available}"
-        # )
+       
+        self.get_logger().info(
+            f"[meta_cb] ns='{ns or '/'}' "
+            f"map={msg.map_name}/{msg.floor_name} "
+            f"vertices={v_count} lanes={l_count} "
+            f"wcs_available={self._georef[ns].available}"
+        )
 
     def _on_image(self, ns: str, img: CompressedImage):
         # If OpenCV is unavailable, we can’t decode to get size → skip
@@ -320,12 +328,72 @@ class MultiRobotDashboard(Node):
             if cv_img is None:
                 raise RuntimeError("cv2.imdecode returned None")
 
-            h, w = cv_img.shape[:2]
+            # --- prepare for transparent/white border ---
+            # if 3-channel BGR → convert to BGRA so outer area can be transparent
+            if len(cv_img.shape) == 3 and cv_img.shape[2] == 3:
+                cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2BGRA)
 
-            # 🔵 ЛОГИРУЕМ ФАКТ ПОЛУЧЕНИЯ ИЗОБРАЖЕНИЯ
+            # --- rotate image into bird-eye (ENU) axis using wcs_yaw, if available ---
+            angle_deg = 0.0
+            gr = self._georef.get(ns)
+            if gr and gr.available and math.isfinite(gr.yaw_map_to_enu):
+                # rotation direction you liked (map → ENU)
+                angle_deg = math.degrees(gr.yaw_map_to_enu)
+
+            h0, w0 = cv_img.shape[:2]
+
+            if abs(angle_deg) > 1e-3:
+                center0 = (w0 / 2.0, h0 / 2.0)
+                M = cv2.getRotationMatrix2D(center0, angle_deg, 1.0)
+
+                # compute new canvas size so nothing is cropped
+                cosA = abs(M[0, 0])
+                sinA = abs(M[0, 1])
+                new_w = int(h0 * sinA + w0 * cosA)
+                new_h = int(h0 * cosA + w0 * sinA)
+
+                # shift so rotated content is centered in the new canvas
+                M[0, 2] += (new_w / 2.0) - center0[0]
+                M[1, 2] += (new_h / 2.0) - center0[1]
+
+                # background outside original map:
+                #  - grayscale → white
+                #  - BGRA      → transparent border with white RGB
+                if len(cv_img.shape) == 2:
+                    border = 255  # white
+                else:
+                    if cv_img.shape[2] == 4:
+                        border = (255, 255, 255, 0)  # white, fully transparent
+                    else:
+                        border = (255, 255, 255)      # white (fallback)
+
+                cv_img = cv2.warpAffine(
+                    cv_img, M, (new_w, new_h),
+                    flags=cv2.INTER_LINEAR,
+                    borderValue=border,
+                )
+
+                h, w = cv_img.shape[:2]
+
+                # remember rotation to fix georeferencing later
+                angle_rad = math.radians(angle_deg)
+                self._img_rot[ns] = {
+                    "angle_rad": angle_rad,
+                    "w0": float(w0),
+                    "h0": float(h0),
+                    "w": float(w),
+                    "h": float(h),
+                }
+            else:
+                # no rotation → clear any stale info
+                h, w = h0, w0
+                self._img_rot.pop(ns, None)
+
+            yaw_val = getattr(gr, "yaw_map_to_enu", float("nan")) if gr else float("nan")
             self.get_logger().info(
                 f"[image_cb] ns='{ns or '/'}' got compressed image "
-                f"format={getattr(img, 'format', '')} size={w}x{h} bytes={len(img.data)}"
+                f"format={getattr(img, 'format', '')} size={w}x{h} bytes={len(img.data)} "
+                f"wcs_yaw={yaw_val:.4f} rad rot_deg={angle_deg:.2f}"
             )
 
             # Re-encode as PNG for the web endpoint
@@ -413,12 +481,39 @@ class MultiRobotDashboard(Node):
         w, h = wh
         corners_px = [(0,0), (w,0), (w,h), (0,h)]
         pts_ll = []
-        for (px, py) in corners_px:
-            xm, ym = self._px_to_m(meta, float(px), float(py))
+        # if we rotated the raster, convert new pixel coords back to original
+        rot = self._img_rot.get(ns)
+        has_rot = bool(rot) and abs(rot.get("angle_rad", 0.0)) > 1e-6
+        if has_rot:
+            angle = rot["angle_rad"]
+            cosA = math.cos(angle)
+            sinA = math.sin(angle)
+            w0 = rot["w0"]; h0 = rot["h0"]
+            # original & new centers in pixel coordinates
+            cx0 = w0 / 2.0
+            cy0 = h0 / 2.0
+            cx1 = w  / 2.0
+            cy1 = h  / 2.0
+
+        for (px_new, py_new) in corners_px:
+            # map corner from rotated canvas back into original pixel grid
+            if has_rot:
+                dx1 = float(px_new) - cx1
+                dy1 = float(py_new) - cy1
+                # inverse rotation: R(-angle) * [dx1; dy1]
+                dx0 =  cosA * dx1 + sinA * dy1
+                dy0 = -sinA * dx1 + cosA * dy1
+                px_orig = dx0 + cx0
+                py_orig = dy0 + cy0
+            else:
+                px_orig = float(px_new)
+                py_orig = float(py_new)
+
+            xm, ym = self._px_to_m(meta, px_orig, py_orig)
             east, north = self._m_to_enu(gr, xm, ym)
             lat, lon = enu_to_latlon(gr.lat0, gr.lon0, east, north)
             pts_ll.append((lat, lon))
-        rotated = (abs(float(meta.rotation)) > 1e-3) or (abs(gr.yaw_map_to_enu) > 1e-3)
+        rotated = (abs(float(meta.rotation)) > 1e-3)
         if rotated and not self.image_overlay_force_bbox:
             return (False, "rotated_image_overlay_requires_bbox_or_plugin", None)
         lats = [p[0] for p in pts_ll]

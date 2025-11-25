@@ -47,12 +47,12 @@ def generate_launch_description():
             }],
         ),
 
-        # Node(
-        #     package='rmf_manager_cloud',
-        #     executable='rmf_influx_exporter.py',
-        #     name='rmf_influx_exporter',
-        #     output='screen',
-        #     respawn=False,  # set True if you want it to auto-restart
-        #     arguments=['--ros-args', '--log-level', 'info'],
-        # ),
+        Node(
+            package='rmf_manager_cloud',
+            executable='rmf_influx_exporter.py',
+            name='rmf_influx_exporter',
+            output='screen',
+            respawn=False,  # set True if you want it to auto-restart
+            arguments=['--ros-args', '--log-level', 'info'],
+        ),
     ])

@@ -33,3 +33,5 @@ curl -X POST "http://127.0.0.1:8086/api/v2/delete?org=orca&bucket=rmf" \
 
 
   GST_DEBUG=2 ROS_DOMAIN_ID=1 ros2 launch rmf_manager_cloud server.launch.py
+
+  ROS_DOMAIN_ID=1 ros2 topic list
