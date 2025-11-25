@@ -193,3 +193,8 @@ Here’s the minimal checklist so nothing bites you.
 4. See both robots appear in **Global**, multi-select them, queue a patrol — each robot should receive a `cmd.<robot_id>` and your RMF services will execute it.
 
 If you keep those four moving parts consistent (NATS IP, Cockroach IP, unique `robot_id`, correct WCS), it’ll “just work.”
+
+
+ROS_DOMAIN_ID=1 ros2 launch rmf_manager_cloud server.launch.py
+
+ROS_DOMAIN_ID=1 ros2 topic list

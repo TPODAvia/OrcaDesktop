@@ -7,6 +7,7 @@
 # - Path endpoint returns current planned path in WGS84 for each ns
 
 import os, sys, math, time, json, threading
+import yaml
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, List
 
@@ -133,6 +134,19 @@ class MultiRobotDashboard(Node):
         self.debug = bool(self.declare_parameter("debug", True).get_parameter_value().bool_value)
         self.image_overlay_enable = bool(self.declare_parameter("image_overlay_enable", True).get_parameter_value().bool_value)
         self.image_overlay_force_bbox = bool(self.declare_parameter("image_overlay_force_bbox", False).get_parameter_value().bool_value)
+
+        # go2rtc integration (RTSP → WebRTC/HLS) for camera visualization
+        # Path to go2rtc.yaml & optional explicit base URL (if empty, UI will assume same host:1984)
+        self.go2rtc_config_path = self.declare_parameter(
+            "go2rtc_config_path", "/config/go2rtc.yaml"
+        ).get_parameter_value().string_value
+        self.go2rtc_base_url = self.declare_parameter(
+            "go2rtc_base_url", ""
+        ).get_parameter_value().string_value
+
+        # ns -> list of {id, stream, label}
+        self._camera_map: Dict[str, List[Dict[str, str]]] = {}
+        self._load_go2rtc_config()
 
         # QoS (tolerant defaults; meta/img are best_effort to avoid stalls)
         self._qos_state = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -411,6 +425,100 @@ class MultiRobotDashboard(Node):
         lons = [p[1] for p in pts_ll]
         return (True, "ok", [[min(lats), min(lons)], [max(lats), max(lons)]])
 
+    # ---------- go2rtc camera config ----------
+    def _load_go2rtc_config(self):
+        """
+        Build mapping ns -> list of camera descriptors from go2rtc.yaml.
+
+        Supported formats:
+
+        1) Explicit mapping (recommended):
+
+           cameras:
+             /yhs_yhsros2:
+               - id: front
+                 stream: yhs_yhsros2_cam_front
+                 label: Front
+               - id: rear
+                 stream: yhs_yhsros2_cam_rear
+                 label: Rear
+               - id: left
+                 stream: yhs_yhsros2_cam_left
+                 label: Left
+               - id: right
+                 stream: yhs_yhsros2_cam_right
+                 label: Right
+
+        2) Fallback: infer from stream names, e.g.:
+
+           streams:
+             yhs_yhsros2_cam1: rtsp://...
+             yhs_yhsros2_cam2: rtsp://...
+
+           → ns "/yhs_yhsros2" with cameras id=cam1,cam2
+        """
+        path = self.go2rtc_config_path
+        mapping: Dict[str, List[Dict[str, str]]] = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+
+            # 1) Explicit "cameras" section (preferred)
+            cams_cfg = data.get("cameras")
+            if isinstance(cams_cfg, dict):
+                for ns_raw, lst in cams_cfg.items():
+                    ns = "/" + (ns_raw or "").strip("/")
+                    entries: List[Dict[str, str]] = []
+                    if isinstance(lst, dict):
+                        # allow flat dict {id: stream_name}
+                        for cid, stream_name in lst.items():
+                            entries.append({
+                                "id": str(cid),
+                                "stream": str(stream_name),
+                                "label": str(cid),
+                            })
+                    elif isinstance(lst, list):
+                        for item in lst:
+                            if not isinstance(item, dict):
+                                continue
+                            cid = str(item.get("id", item.get("name", "")) or "")
+                            stream_name = str(item.get("stream", "") or "")
+                            if not stream_name:
+                                continue
+                            label = str(item.get("label", cid or stream_name))
+                            entries.append({
+                                "id": cid or stream_name,
+                                "stream": stream_name,
+                                "label": label,
+                            })
+                    if entries:
+                        mapping[ns] = entries
+
+            # 2) Fallback: infer from stream names
+            if not mapping:
+                streams = data.get("streams", {}) or {}
+                for raw_name in streams.keys():
+                    name = str(raw_name)
+                    # split on last '_' → prefix = ns-ish, suffix = cam id
+                    if "_" not in name:
+                        continue
+                    prefix, cam_id = name.rsplit("_", 1)
+                    ns = "/" + prefix.strip("/")
+                    label = cam_id
+                    mapping.setdefault(ns, []).append({
+                        "id": cam_id,
+                        "stream": name,
+                        "label": label,
+                    })
+
+            self._camera_map = mapping
+            self.get_logger().info(
+                f"[go2rtc] loaded camera map from '{path}' for {len(mapping)} namespaces"
+            )
+        except Exception as e:
+            self._camera_map = {}
+            self.get_logger().warn(f"[go2rtc] failed to load config from '{path}': {e}")
+
     # ---------- web ----------
     def _start_web(self):
         app = Flask(
@@ -442,7 +550,10 @@ class MultiRobotDashboard(Node):
                     "map_name": getattr(s, "map_name", "") if s else "",
                     "floor_name": getattr(s, "floor_name", "") if s else "",
                     "mode_text": getattr(s, "mode_text", "") if s else "",
-                    "battery_pct": (float(getattr(s,"battery_pct", float("nan"))) if s else float("nan")),
+                    "mode": int(getattr(s, "mode", 0)) if s else 0,
+                    "battery_pct": (float(getattr(s, "battery_pct", float("nan"))) if s else float("nan")),
+                    "battery_voltage": (float(getattr(s, "battery_voltage", float("nan"))) if s else float("nan")),
+                    "vehicle_speed": (float(getattr(s, "vehicle_speed", float("nan"))) if s else float("nan")),
                     "has_fix": bool(ent.has_fix),
                     "lat": float(ent.lat) if math.isfinite(ent.lat) else None,
                     "lon": float(ent.lon) if math.isfinite(ent.lon) else None,
@@ -513,6 +624,45 @@ class MultiRobotDashboard(Node):
         # --------- helpers ----------
         def _nskey(ns_in: str) -> str:
             return "/" + (ns_in or "").strip("/")
+
+        # --------- REST: cameras (go2rtc) ----------
+        @app.get("/api/cameras")
+        def api_cameras():
+            """
+            Return all cameras for all namespaces, derived from go2rtc.yaml.
+            {
+              "ok": true,
+              "base_url": "http://host:1984"  # or ""
+              "cameras": {
+                 "/yhs_yhsros2": [
+                   {"id":"front","stream":"yhs_yhsros2_cam_front","label":"Front"},
+                   ...
+                 ],
+                 ...
+              }
+            }
+            """
+            return jsonify({
+                "ok": True,
+                "base_url": self.go2rtc_base_url or "",
+                "cameras": self._camera_map,
+                "t": time.time(),
+            })
+
+        @app.get("/api/<path:ns>/cameras")
+        def api_cameras_ns(ns):
+            """
+            Cameras only for the given namespace.
+            """
+            ns_key = _nskey(ns)
+            cams = self._camera_map.get(ns_key, [])
+            return jsonify({
+                "ok": True,
+                "ns": ns_key,
+                "base_url": self.go2rtc_base_url or "",
+                "cameras": cams,
+                "t": time.time(),
+            })
 
         # --------- REST: tasks/list ----------
         @app.get("/api/<path:ns>/tasks")

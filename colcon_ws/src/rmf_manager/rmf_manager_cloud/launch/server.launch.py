@@ -5,6 +5,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
+from ament_index_python.packages import get_package_share_directory
+import os
 
 def generate_launch_description():
     influx_url     = LaunchConfiguration('influx_url')
@@ -37,22 +39,16 @@ def generate_launch_description():
                 'ui_viz_host': '0.0.0.0',
                 'ui_viz_port': 8080,
                 'viz_update_hz': 1.0,
+                # go2rtc integration
+                # mount go2rtc.yaml into this container at /config/go2rtc.yaml
+                'go2rtc_config_path': os.path.join(get_package_share_directory('rmf_manager_cloud'), 'launch', 'go2rtc.yaml'),
+                # leave empty to auto-use http://<dashboard_host>:1984
+                'go2rtc_base_url': '',
             }],
         ),
-        # Node(
-        #     package='rmf_manager_cloud',
-        #     executable='rmf_influx_exporter.py',
-        #     name='rmf_influx_exporter',
-        #     output='screen',
-        #     respawn=False,
-        #     arguments=['--ros-args', '--log-level', 'info'],
-        # ),
 
-        # ---- Added cam_noise_node (publishes /multi_cam_snapshot + writes to Influx) ----
         # Node(
         #     package='rmf_manager_cloud',
-        #     # If your setup installs an entrypoint named "dashboard_node" (no .py),
-        #     # change the next line to: executable='dashboard_node',
         #     executable='rmf_influx_exporter.py',
         #     name='rmf_influx_exporter',
         #     output='screen',

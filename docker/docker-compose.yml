@@ -110,3 +110,24 @@ services:
       - ./grafana/data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
     restart: unless-stopped
+
+  zoneminder:
+    build:
+      context: ./zoneminder
+    container_name: zoneminder
+    shm_size: "512m"
+    ports:
+      - "8080:80"
+    volumes:
+      - /mnt/zm_sda1/events:/var/cache/zoneminder/events
+      - /mnt/zm_sda1/images:/var/cache/zoneminder/images
+      - /mnt/zm_sda1/logs:/var/log/zm
+    restart: unless-stopped
+
+  go2rtc:
+    image: ghcr.io/alexxit/go2rtc:latest
+    container_name: go2rtc
+    network_mode: host        # easiest in your setup, like zenohd etc.
+    restart: unless-stopped
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro

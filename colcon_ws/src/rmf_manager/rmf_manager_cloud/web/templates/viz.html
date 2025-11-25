@@ -55,7 +55,7 @@
         background:#11161f; border:1px solid #2a3240; padding:6px 8px; border-radius:8px; font-size:12px;
       }
       #opacity, #size { width:120px; }
-      button, select, input[type="range"] {
+      button, select, input[type="range"], input[type="number"] {
         padding:6px 10px; border-radius:8px; background:#263143; color:#e6edf3; border:1px solid #39465a; cursor:pointer;
       }
       button:hover { filter:brightness(1.1); }
@@ -76,6 +76,201 @@
         bottom: 18px; background:#1b2130; color:#e6edf3; border:1px solid #2a3240;
         padding:10px 14px; border-radius:10px; display:none; z-index:99999;
       }
+
+      /* Mini robot dashboard (right center) */
+      #miniDash {
+        position: fixed;
+        right: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 9999;
+        min-width: 190px;
+        max-width: 260px;
+        background: #11161f;
+        border: 1px solid #2a3240;
+        border-radius: 10px;
+        padding: 10px 12px;
+        box-shadow: 0 14px 35px rgba(0,0,0,.45);
+        font-size: 13px;
+      }
+      #miniDash .mini-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      #miniDash .mini-pill {
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid #2a3240;
+        background: #22314a;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      #miniDash .mini-row {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 4px;
+      }
+      #miniDash .mini-label {
+        color: #9ca3af;
+      }
+      #miniDash .mini-value {
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---- Camera dock (bottom-right) ---- */
+      #camDock {
+        position: fixed;
+        right: 12px;
+        bottom: 8px;
+        z-index: 9998;
+        width: 320px;
+        max-height: 50%;
+        background: #11161f;
+        border: 1px solid #2a3240;
+        border-radius: 10px;
+        padding: 8px 10px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.5);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #camDock .cam-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+        color: #9ca3af;
+      }
+      #camButtons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .cam-btn {
+        font-size: 11px;
+        padding: 4px 6px;
+        border-radius: 999px;
+        border: 1px solid #2a3240;
+        background: #1b2434;
+        cursor: pointer;
+      }
+      .cam-btn.active {
+        border-color: #22c55e;
+        color: #22c55e;
+      }
+      #camSlots {
+        display: flex;
+        gap: 6px;
+      }
+      .cam-slot {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .cam-slot-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 11px;
+        color: #9ca3af;
+      }
+      .cam-slot-title {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .cam-slot-close {
+        background: transparent;
+        border: none;
+        color: #9ca3af;
+        cursor: pointer;
+        padding: 0 4px;
+        font-size: 14px;
+        line-height: 1;
+      }
+      .cam-slot-body {
+        aspect-ratio: 16 / 9;
+        background: #050816;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .cam-frame {
+        width: 100%;
+        height: 100%;
+        border: none;
+        display: block;
+        cursor: pointer;
+      }
+
+      /* Fullscreen camera overlay */
+      #camFullscreen {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,.85);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+      }
+      #camFullscreen.active {
+        display: flex;
+      }
+      .cam-full-inner {
+        position: relative;
+        width: 90%;
+        max-width: 960px;
+        aspect-ratio: 16 / 9;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 16px 40px rgba(0,0,0,.7);
+        background: #050816;
+      }
+      #camFullFrame {
+        width: 100%;
+        height: 100%;
+        border: none;
+      }
+      #camFullClose {
+        position: absolute;
+        top: 8px;
+        right: 10px;
+        z-index: 2;
+        background: rgba(15,23,42,.7);
+        border: none;
+        color: #e5e7eb;
+        border-radius: 999px;
+        width: 28px;
+        height: 28px;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+      }
+      #camFullLabel {
+        position: absolute;
+        left: 10px;
+        bottom: 8px;
+        padding: 4px 8px;
+        background: rgba(15,23,42,.75);
+        border-radius: 999px;
+        font-size: 12px;
+        color: #e5e7eb;
+      }
+
+      @media (max-width: 900px) {
+        #camDock {
+          width: 260px;
+          max-height: 40%;
+        }
+        #miniDash {
+          display: none;
+        }
+      }
+
     </style>
   </head>
   <body>
@@ -89,10 +284,75 @@
       <span class="pill" id="selList">Selected: -</span>
     </div>
 
+
     <div id="map" aria-label="OpenStreetMap with robots and overlays"></div>
+
+    <!-- Mini dashboard: right-center status for currently selected namespace -->
+    <div id="miniDash" aria-label="Robot status mini dashboard">
+      <div class="mini-title">
+        <span id="miniRobotName">—</span>
+        <span id="miniModePill" class="mini-pill">
+          <span id="miniMode">—</span>
+        </span>
+      </div>
+      <div class="mini-row">
+        <span class="mini-label">Speed</span>
+        <span class="mini-value"><span id="miniSpeed">—</span> m/s</span>
+      </div>
+      <div class="mini-row">
+        <span class="mini-label">Battery</span>
+        <span class="mini-value">
+          <span id="miniBattPct">—</span>% ·
+          <span id="miniBattVolt">—</span> V
+        </span>
+      </div>
+    </div>
+
+    <!-- Camera dock: 2 tiles + camera buttons for current namespace -->
+    <div id="camDock" aria-label="Robot cameras">
+      <div class="cam-header">
+        <span>Cameras for <span id="camNsLabel">—</span></span>
+        <span id="camHint" style="font-size:11px;">click button → tile, click tile → zoom</span>
+      </div>
+      <div id="camButtons"></div>
+      <div id="camSlots">
+        <div class="cam-slot" data-slot="0">
+          <div class="cam-slot-header">
+            <span class="cam-slot-title" data-slot-title="0">Empty</span>
+            <button class="cam-slot-close" data-slot-close="0" type="button">×</button>
+          </div>
+          <div class="cam-slot-body">
+            <iframe class="cam-frame" data-slot-frame="0" title="Camera 1" allowfullscreen></iframe>
+          </div>
+        </div>
+        <div class="cam-slot" data-slot="1">
+          <div class="cam-slot-header">
+            <span class="cam-slot-title" data-slot-title="1">Empty</span>
+            <button class="cam-slot-close" data-slot-close="1" type="button">×</button>
+          </div>
+          <div class="cam-slot-body">
+            <iframe class="cam-frame" data-slot-frame="1" title="Camera 2" allowfullscreen></iframe>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fullscreen camera overlay -->
+    <div id="camFullscreen" aria-label="Fullscreen camera">
+      <div class="cam-full-inner">
+        <button id="camFullClose" type="button">×</button>
+        <iframe id="camFullFrame" title="Fullscreen camera" allowfullscreen></iframe>
+        <div id="camFullLabel"></div>
+      </div>
+    </div>
 
     <div id="bar">
       <label>ns <select id="nsSelect"></select></label>
+      <label>
+        loops
+        <input id="loopsInput" type="number" min="1" max="99" step="1" value="1" style="width:3.2rem; margin-left:4px;" />
+      </label>
+
       <button id="btnPublishPatrol" type="button">Publish patrol</button>
       <button id="btnClearSel" type="button">Clear</button>
       <button id="btnCancelAll" type="button">Cancel all</button>
@@ -151,6 +411,183 @@
 
       // robots
       const markers = new Map();
+
+      // cameras (go2rtc): ns -> [{id, stream, label}]
+      let allCameras = {};
+      let go2rtcBase = "";
+      // two visible slots: index 0 and 1
+      let activeCamSlots = [null, null]; // each: {ns, stream, label}
+
+      async function loadCameras(){
+        try{
+          const j = await fetchJSON('/api/cameras');
+          if(j && j.ok !== false){
+            allCameras = j.cameras || {};
+            go2rtcBase = j.base_url || "";
+            log('cameras loaded', allCameras);
+            refreshCameraUI();
+          }
+        }catch(e){
+          warn('loadCameras failed', e);
+        }
+      }
+
+      function go2rtcUrlForStream(streamName){
+        let base = go2rtcBase;
+        if(!base){
+          // default: same host, port 1984
+          base = window.location.protocol + '//' + window.location.hostname + ':1984';
+        }
+        if(base.endsWith('/')) base = base.slice(0, -1);
+        return `${base}/stream.html?src=${encodeURIComponent(streamName)}`;
+      }
+
+      function refreshCameraUI(){
+        const dock = document.getElementById('camDock');
+        if(!dock) return;
+
+        const ns = activeNs || '/';
+        const labelEl = document.getElementById('camNsLabel');
+        if(labelEl) labelEl.textContent = ns;
+
+        const cams = allCameras[ns] || [];
+
+        const btnWrap = document.getElementById('camButtons');
+        if(btnWrap){
+          btnWrap.innerHTML = '';
+          if(!cams.length){
+            const span = document.createElement('span');
+            span.style.fontSize = '11px';
+            span.style.color = '#6b7280';
+            span.textContent = 'No cameras configured';
+            btnWrap.appendChild(span);
+          }else{
+            cams.forEach((c, idx)=>{
+              const b = document.createElement('button');
+              b.type = 'button';
+              b.className = 'cam-btn';
+              b.textContent = c.label || c.id || (`cam${idx+1}`);
+              b.addEventListener('click', ()=>{
+                assignCameraToSlot(c);
+              });
+              btnWrap.appendChild(b);
+            });
+          }
+        }
+
+        // If we switched ns, clear slots that belong to other ns
+        activeCamSlots.forEach((slot, i)=>{
+          if(slot && slot.ns !== ns){
+            activeCamSlots[i] = null;
+          }
+        });
+
+        // Auto-fill: first time for this ns → put first 2 cams into slots
+        if(cams.length && !activeCamSlots[0] && !activeCamSlots[1]){
+          activeCamSlots[0] = {
+            ns,
+            stream: cams[0].stream,
+            label: cams[0].label || cams[0].id || cams[0].stream,
+          };
+          if(cams.length > 1){
+            activeCamSlots[1] = {
+              ns,
+              stream: cams[1].stream,
+              label: cams[1].label || cams[1].id || cams[1].stream,
+            };
+          }
+        }
+
+        applySlotsToDom();
+      }
+
+      function assignCameraToSlot(cam){
+        const ns = activeNs || '/';
+        // pick slot: first empty, otherwise flip slot 0
+        let slotIdx = activeCamSlots.findIndex(s => s === null);
+        if(slotIdx === -1){
+          slotIdx = 0;
+        }
+        activeCamSlots[slotIdx] = {
+          ns,
+          stream: cam.stream,
+          label: cam.label || cam.id || cam.stream,
+        };
+        applySlotsToDom();
+      }
+
+      function clearSlot(idx){
+        activeCamSlots[idx] = null;
+        applySlotsToDom();
+      }
+
+      function applySlotsToDom(){
+        for(let i=0; i<2; i++){
+          const s = activeCamSlots[i];
+          const frame = document.querySelector(`iframe[data-slot-frame="${i}"]`);
+          const title = document.querySelector(`span[data-slot-title="${i}"]`);
+          const closeBtn = document.querySelector(`button[data-slot-close="${i}"]`);
+          if(!frame || !title || !closeBtn) continue;
+
+          if(!s){
+            frame.src = 'about:blank';
+            title.textContent = 'Empty';
+            closeBtn.style.visibility = 'hidden';
+          }else{
+            frame.src = go2rtcUrlForStream(s.stream);
+            title.textContent = s.label;
+            closeBtn.style.visibility = 'visible';
+          }
+        }
+      }
+
+      function setupCameraDomInteractions(){
+        // slot close buttons
+        for(let i=0; i<2; i++){
+          const closeBtn = document.querySelector(`button[data-slot-close="${i}"]`);
+          if(closeBtn){
+            closeBtn.addEventListener('click', (ev)=>{
+              ev.stopPropagation();
+              clearSlot(i);
+            });
+          }
+          const frame = document.querySelector(`iframe[data-slot-frame="${i}"]`);
+          if(frame){
+            frame.addEventListener('click', ()=>{
+              const s = activeCamSlots[i];
+              if(!s) return;
+              openFullscreenCamera(s);
+            });
+          }
+        }
+
+        const full = document.getElementById('camFullscreen');
+        const fullClose = document.getElementById('camFullClose');
+        if(fullClose){
+          fullClose.addEventListener('click', ()=>{
+            full.classList.remove('active');
+          });
+        }
+        if(full){
+          // click on dark area closes
+          full.addEventListener('click', (ev)=>{
+            if(ev.target === full){
+              full.classList.remove('active');
+            }
+          });
+        }
+      }
+
+      function openFullscreenCamera(slot){
+        const full = document.getElementById('camFullscreen');
+        const frame = document.getElementById('camFullFrame');
+        const label = document.getElementById('camFullLabel');
+        if(!full || !frame || !label) return;
+
+        frame.src = go2rtcUrlForStream(slot.stream);
+        label.textContent = `${slot.ns} · ${slot.label}`;
+        full.classList.add('active');
+      }
 
       // overlays per (ns|map|floor)
       const overlayGroups = new Map(); // key -> {img, verts, edges}
@@ -286,6 +723,69 @@
         closeMenu(); showToast(`Removed ${vmenuFor.name}`);
       });
 
+      function updateMiniDashboard(list){
+        const panel = document.getElementById('miniDash');
+        if (!panel) return;
+
+        const ns = activeNs || '/';
+        let r = null;
+        if (Array.isArray(list) && list.length) {
+          r = list.find(o => (o.ns || '/') === ns) || list[0];
+        }
+
+        const nameEl = document.getElementById('miniRobotName');
+        const modeEl = document.getElementById('miniMode');
+        const speedEl = document.getElementById('miniSpeed');
+        const pctEl = document.getElementById('miniBattPct');
+        const voltEl = document.getElementById('miniBattVolt');
+        const modePill = document.getElementById('miniModePill');
+
+        if (!r) {
+          panel.style.opacity = 0.4;
+          if (nameEl) nameEl.textContent = '—';
+          if (modeEl) modeEl.textContent = '—';
+          if (speedEl) speedEl.textContent = '—';
+          if (pctEl) pctEl.textContent = '—';
+          if (voltEl) voltEl.textContent = '—';
+          if (modePill) {
+            modePill.style.borderColor = '#2a3240';
+            modePill.style.color = '#e6edf3';
+          }
+          return;
+        }
+
+        panel.style.opacity = 1;
+
+        const pctRaw    = (typeof r.battery_pct === 'number')   ? r.battery_pct   : NaN;
+        const pct       = Number.isFinite(pctRaw)               ? Math.round(pctRaw * 100) : null;
+        const vSpeedRaw = (typeof r.vehicle_speed === 'number') ? r.vehicle_speed : NaN;
+        const vSpeed    = Number.isFinite(vSpeedRaw)            ? vSpeedRaw : null;
+        const vBattRaw  = (typeof r.battery_voltage === 'number') ? r.battery_voltage : NaN;
+        const vBatt     = Number.isFinite(vBattRaw)             ? vBattRaw : null;
+
+        if (nameEl) nameEl.textContent = r.robot_name || r.ns || 'robot';
+        if (modeEl) modeEl.textContent = r.mode_text || (typeof r.mode === 'number' ? `mode ${r.mode}` : '—');
+        if (speedEl) speedEl.textContent = (vSpeed !== null) ? vSpeed.toFixed(2) : '—';
+        if (pctEl) pctEl.textContent = (pct !== null) ? String(pct) : '—';
+        if (voltEl) voltEl.textContent = (vBatt !== null) ? vBatt.toFixed(1) : '—';
+
+        // Simple color hint by mode_text
+        if (modePill) {
+          const modeTxt = (r.mode_text || '').toLowerCase();
+          let color = '#22c55e';  // default: "ok"/moving
+
+          if (modeTxt.includes('idle')) {
+            color = '#9ca3af';
+          } else if (modeTxt.includes('error') || modeTxt.includes('fault') || modeTxt.includes('alarm')) {
+            color = '#ef4444';
+          }
+
+          modePill.style.borderColor = color;
+          modePill.style.color = color;
+        }
+      }
+
+
       function updateRobots(list){
         const seen = new Set();
         for(const r of list){
@@ -297,7 +797,7 @@
           const label = `${r.robot_name || key} · ${r.ns} · ${r.mode_text || ''} · ${pct}% · ${r.map_name}/${r.floor_name}`;
           if(!hasPos){ if(m) m.setOpacity(0); continue; }
           const pt = [r.lat, r.lon];
-          const icon = makeRobotIcon(r.has_fix ? '#22c55e' : '#ef4444', r.heading_deg || 0, !r.has_fix);
+          const icon = makeRobotIcon(r.has_fix ? '#ef4444' : '#000000', r.heading_deg || 0, !r.has_fix);
           if(!m){
             m = L.marker(pt, { icon });
             m.addTo(map);
@@ -314,6 +814,7 @@
           if(!seen.has(k)) m.setOpacity(0);
         }
         document.getElementById('count').textContent = `${list.length} robot${list.length===1?'':'s'}`;
+        updateMiniDashboard(list);
       }
 
       function updateMaps(data){
@@ -489,7 +990,8 @@
 
         if(robotsOk){ lastGoodRobots = robotsJ; updateRobots(robotsJ.robots || []); } else { updateRobots(lastGoodRobots.robots || []); }
         if(mapsOk){ lastGoodMaps = mapsJ; updateMaps(mapsJ); applyScaleToScene(); } else { updateMaps(lastGoodMaps); applyScaleToScene(); }
-
+        // camera panel depends on activeNs and known namespaces (from /api/maps)
+        refreshCameraUI();
         // update path for active ns
         if(activeNs) fetchPathFor(activeNs);
 
@@ -498,6 +1000,10 @@
 
       window.addEventListener('load', ()=>{
         createMap();
+        setupCameraDomInteractions();
+        loadCameras();
+        // loops input for patrol
+        const loopsInput = document.getElementById('loopsInput');
 
         // overlay alpha
         document.getElementById('opacity').addEventListener('input', (e)=>{
@@ -529,14 +1035,28 @@
         });
 
         document.getElementById('nsSelect').addEventListener('change', (e)=>{ activeNs = e.target.value || '/'; });
+        document.getElementById('nsSelect').addEventListener('change', (e)=>{ activeNs = e.target.value || '/'; refreshCameraUI(); });
+
 
         document.getElementById('btnPublishPatrol').addEventListener('click', async ()=>{
           if(!activeNs) return alert('Select namespace');
           if(!selectedOrder.length) return alert('Select at least one vertex');
+
+          let loops = 1;
+          if (loopsInput) {
+            const v = parseInt(loopsInput.value || '1', 10);
+            if (!isNaN(v) && v > 0) loops = v;
+          }
+
           try{
-            await postJSON(`/api/${activeNs.replace(/^\//,'')}/patrol`, { sequence: selectedOrder, loops: 1 });
-            showToast('Patrol scheduled');
-          }catch(e){ alert('Patrol failed: ' + e.message); }
+            await postJSON(
+              `/api/${activeNs.replace(/^\//,'')}/patrol`,
+              { sequence: selectedOrder, loops: loops }
+            );
+            showToast(`Patrol scheduled (loops: ${loops})`);
+          }catch(e){
+            alert('Patrol failed: ' + e.message);
+          }
         });
 
         document.getElementById('btnClearSel').addEventListener('click', clearSelection);
@@ -553,8 +1073,11 @@
           catch(e){ alert('Return home failed: ' + e.message); }
         });
 
+        // 🔴 IMPORTANT: draw immediately on first data
+        tick();                 // <--- run first fetch/draw right now
         setInterval(tick, 1000);
       });
+
     </script>
   </body>
 </html>
