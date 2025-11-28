@@ -12,3 +12,6 @@ http://127.0.0.1:3000
 
 sudo chmod -R 777 ./grafana/data
 sudo chmod -R 777 ./grafana/provisioning
+
+
+https://github.com/blakeblackshear/frigate/discussions/19970

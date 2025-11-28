@@ -1,0 +1,84 @@
+logger:
+  default: info
+
+mqtt:
+  enabled: false
+
+detectors:
+  onnx:
+    type: onnx
+
+model:
+  model_type: yolo-generic
+  width: 320          # matches IMG_SIZE we used above
+  height: 320
+  input_tensor: nchw
+  input_dtype: float
+  path: /config/models/yolov9-s-320.onnx   # <--- name from step 1
+  labelmap_path: /labelmap/coco-80.txt
+
+detect:
+  enabled: true
+
+objects:
+  track:
+    - person
+    - car
+
+ffmpeg:
+  hwaccel_args: preset-nvidia-h264
+
+cameras:
+  cam1:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://admin:admin@89.113.6.17:20001/1
+          roles: [detect, record]
+    detect:
+      width: 1280
+      height: 720
+    record:
+      enabled: true
+
+  cam2:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://admin:admin@89.113.6.17:20002/1
+          roles: [detect, record]
+    detect:
+      width: 1280
+      height: 720
+    record:
+      enabled: true
+
+  cam3:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://admin:admin@89.113.6.17:20003/1
+          roles: [detect, record]
+    detect:
+      width: 1280
+      height: 720
+    record:
+      enabled: true
+
+  cam4:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://admin:admin@89.113.6.17:20004/1
+          roles: [detect, record]
+    detect:
+      width: 1280
+      height: 720
+    record:
+      enabled: true
+
+record:
+  enabled: true
+  retain:
+    days: 3
+    mode: motion

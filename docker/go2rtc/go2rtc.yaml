@@ -1,0 +1,5 @@
+streams:
+  yhs_yhsros2_cam1: rtsp://admin:admin@89.113.6.17:20001/1
+  yhs_yhsros2_cam2: rtsp://admin:admin@89.113.6.17:20002/1
+  yhs_yhsros2_cam3: rtsp://admin:admin@89.113.6.17:20003/1
+  yhs_yhsros2_cam4: rtsp://admin:admin@89.113.6.17:20004/1
