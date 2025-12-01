@@ -15,3 +15,6 @@ sudo chmod -R 777 ./grafana/provisioning
 
 
 https://github.com/blakeblackshear/frigate/discussions/19970
+
+
+docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi

@@ -1,0 +1,1 @@
+pyinstaller --onefile --noconsole orca_docker_ui.py

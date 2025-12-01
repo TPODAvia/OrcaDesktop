@@ -5,3 +5,7 @@ docker/grafana/
 docker/influxdb/
 docker/cloud_appimage_build/
 docker/frigate/storage
+docker/portainer-data
+dev/build
+dev/dist
+dev/orca_docker_ui.spec

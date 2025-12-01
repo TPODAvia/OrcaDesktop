@@ -33,8 +33,9 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://admin:admin@89.113.6.17:20001/1
-          roles: [detect, record]
+        - path: rtsp://localhost:8554/yhs_yhsros2_cam1
+          # roles: [detect, record]
+          roles: [detect]
     detect:
       width: 1280
       height: 720
@@ -45,8 +46,8 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://admin:admin@89.113.6.17:20002/1
-          roles: [detect, record]
+        - path: rtsp://localhost:8554/yhs_yhsros2_cam2
+          roles: [detect]
     detect:
       width: 1280
       height: 720
@@ -57,8 +58,8 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://admin:admin@89.113.6.17:20003/1
-          roles: [detect, record]
+        - path: rtsp://localhost:8554/yhs_yhsros2_cam3
+          roles: [detect]
     detect:
       width: 1280
       height: 720
@@ -69,8 +70,8 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://admin:admin@89.113.6.17:20004/1
-          roles: [detect, record]
+        - path: rtsp://localhost:8554/yhs_yhsros2_cam4
+          roles: [detect]
     detect:
       width: 1280
       height: 720
