@@ -288,7 +288,6 @@
     <div id="top">
       <span class="pill" id="status">loading…</span>
       <span class="pill">zoom: wheel • pan: drag</span>
-      <span class="legend"><span class="dot ok"></span> fix <span class="dot stale"></span> stale <span class="dot no"></span> no fix</span>
       <span class="pill" id="count">0 robots</span>
       <span class="pill" id="mapsInfo">maps: -</span>
       <span class="pill" id="overlayInfo">overlay: -</span>
@@ -377,6 +376,10 @@
       <span id="sizeVal" class="pill">x1.4</span>
 
       <button id="btnCenterMap" type="button">Center</button>
+
+      <span class="badge">teleop</span>
+      <button id="btnTeleopToggle" type="button">teleop OFF (Space)</button>
+      <span class="pill" id="teleopStatus">teleop: DISABLED (Space)</span>
     </div>
 
     <div id="toast"></div>
@@ -420,8 +423,222 @@
 
       let map, tiles;
 
+      // ----- Keyboard teleop (arrow keys → cmd_vel) -----
+      const TELEOP_BASE = Object.freeze({
+        LIN: 0.8,   // m/s
+        ANG: 0.8    // rad/s
+      });
+      const TELEOP_HZ = 10; // sending frequency [Hz]; backend also has its own safety timer
+
+      const teleopState = { up: false, down: false, left: false, right: false };
+      let teleopInterval = null;
+      let teleopSending = false;
+      // true = this teleop source is active for twist_mux
+      // false = UI does not send /teleop_cmd, twist_mux can use other cmd_vel topics
+      let teleopEnabled = false;
+
+      const teleopReleaseTimers = {
+        up: null,
+        down: null,
+        left: null,
+        right: null,
+      };
+      const TELEOP_KEYUP_DEBOUNCE_MS = 120;
+
+      function teleopComputeVel(){
+        let vx = 0.0;
+        let wz = 0.0;
+        if (teleopState.up)   vx += TELEOP_BASE.LIN;
+        if (teleopState.down) vx -= TELEOP_BASE.LIN;
+        if (teleopState.left) wz += TELEOP_BASE.ANG;
+        if (teleopState.right)wz -= TELEOP_BASE.ANG;
+        return { vx, wz };
+      }
+
+      async function teleopSendOnce(){
+        if (!activeNs) return;
+        if (teleopSending) return;
+
+        const { vx, wz } = teleopComputeVel();
+        const ns = activeNs.replace(/^\//, '');
+
+        teleopSending = true;
+        try {
+          await fetch(`/api/${ns}/teleop_cmd`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ linear_x: vx, angular_z: wz })
+          });
+        } catch (e) {
+          warn('teleop send failed', e);
+        } finally {
+          teleopSending = false;
+        }
+      }
+
+      function teleopUpdateLoop(){
+        const any = teleopState.up || teleopState.down || teleopState.left || teleopState.right;
+        const statusEl = document.getElementById('teleopStatus');
+
+        // If teleop is disabled, we never send cmd_vel
+        if (!teleopEnabled) {
+          if (teleopInterval) {
+            clearInterval(teleopInterval);
+            teleopInterval = null;
+          }
+          if (statusEl) statusEl.textContent = 'teleop: DISABLED (Space)';
+          return;
+        }
+
+        // teleop enabled: behave as before
+        if (any) {
+          if (!teleopInterval) {
+            // kick off immediate send + periodic loop
+            teleopSendOnce();
+            teleopInterval = setInterval(teleopSendOnce, 1000 / TELEOP_HZ);
+          }
+          if (statusEl) statusEl.textContent = 'teleop: ACTIVE (WASD, Space=off)';
+        } else {
+          if (teleopInterval) {
+            clearInterval(teleopInterval);
+            teleopInterval = null;
+          }
+          // while enabled, send a single (0,0) when keys are released
+          teleopSendOnce();
+          if (statusEl) statusEl.textContent = 'teleop: idle (WASD, Space=off)';
+        }
+      }
+
+
+      function setTeleopEnabled(on){
+        const wasEnabled = teleopEnabled;
+        teleopEnabled = !!on;
+
+        const btn = document.getElementById('btnTeleopToggle');
+        const statusEl = document.getElementById('teleopStatus');
+
+        if (btn) {
+          btn.textContent = teleopEnabled ? 'teleop ON (Space)' : 'teleop OFF (Space)';
+          btn.classList.toggle('active', teleopEnabled);
+        }
+
+        if (!teleopEnabled) {
+          // Turning OFF: stop local loop and clear key state.
+          if (teleopInterval) {
+            clearInterval(teleopInterval);
+            teleopInterval = null;
+          }
+          for (const k of ['up', 'down', 'left', 'right']) {
+            teleopState[k] = false;
+          }
+          if (statusEl) statusEl.textContent = 'teleop: DISABLED (Space)';
+        } else {
+          // Turning ON: idle until you press WASD.
+          if (statusEl) statusEl.textContent = 'teleop: idle (WASD, Space=off)';
+        }
+
+        // Tell the backend that teleop is globally enabled/disabled.
+        fetch('/api/teleop_state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: teleopEnabled })
+        }).catch(e => warn('teleop_state update failed', e));
+      }
+
+
+      function teleopResetState(){
+        for (const k of ['up', 'down', 'left', 'right']) {
+          if (teleopReleaseTimers[k]) {
+            clearTimeout(teleopReleaseTimers[k]);
+            teleopReleaseTimers[k] = null;
+          }
+          teleopState[k] = false;
+        }
+        teleopUpdateLoop();
+      }
+
+      function setupTeleopKeys(){ 
+        const teleopKeys = {
+          w: 'up',
+          s: 'down',
+          a: 'left',
+          d: 'right'
+        };
+
+        // KEYDOWN
+        window.addEventListener('keydown', (ev) => {
+          const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toLowerCase() : '';
+          if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return;
+
+          // Space toggles teleop ON/OFF
+          if ((ev.code === 'Space' || ev.key === ' ') && !ev.repeat) {
+            ev.preventDefault();
+            setTeleopEnabled(!teleopEnabled);
+            return;
+          }
+
+          const k = teleopKeys[ev.key.toLowerCase()];
+          if (!k) return;  // not a teleop key → ignore
+
+          // Ignore auto-repeat
+          if (ev.repeat) {
+            ev.preventDefault();
+            return;
+          }
+
+          ev.preventDefault();
+
+          if (!activeNs) {
+            showToast('Select namespace for teleop');
+            return;
+          }
+
+          // cancel pending release for this key (see debounce)
+          if (teleopReleaseTimers[k]) {
+            clearTimeout(teleopReleaseTimers[k]);
+            teleopReleaseTimers[k] = null;
+          }
+
+          if (!teleopState[k]) {
+            teleopState[k] = true;
+            teleopUpdateLoop();  // will only send if teleopEnabled === true
+          }
+        });
+
+        // KEYUP stays the same as you have now
+        window.addEventListener('keyup', (ev) => {
+          const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toLowerCase() : '';
+          if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return;
+
+          const teleKey = teleopKeys[ev.key.toLowerCase()];
+          if (!teleKey) return;
+
+          ev.preventDefault();
+
+          if (teleopReleaseTimers[teleKey]) {
+            clearTimeout(teleopReleaseTimers[teleKey]);
+            teleopReleaseTimers[teleKey] = null;
+          }
+
+          teleopReleaseTimers[teleKey] = setTimeout(() => {
+            teleopReleaseTimers[teleKey] = null;
+            if (teleopState[teleKey]) {
+              teleopState[teleKey] = false;
+              teleopUpdateLoop(); // will stop when last key releases (if enabled)
+            }
+          }, TELEOP_KEYUP_DEBOUNCE_MS);
+        });
+
+        const statusEl = document.getElementById('teleopStatus');
+        if (statusEl && !teleopEnabled) {
+          statusEl.textContent = 'teleop: DISABLED (Space)';
+        }
+      }
+
+
       // robots
       const markers = new Map();
+
 
       // cameras (go2rtc): ns -> [{id, stream, label}]
       let allCameras = {};
@@ -836,34 +1053,78 @@
 
       function updateRobots(list){
         const seen = new Set();
-        for(const r of list){
+        for (const r of list) {
           const key = r.ns || r.robot_name || '?';
           seen.add(key);
+
           const hasPos = Number.isFinite(r.lat) && Number.isFinite(r.lon);
           let m = markers.get(key);
-          const pct = (typeof r.battery_pct==='number') ? Math.round(r.battery_pct*100) : '-';
-          const label = `${r.robot_name || key} · ${r.ns} · ${r.mode_text || ''} · ${pct}% · ${r.map_name}/${r.floor_name}`;
-          if(!hasPos){ if(m) m.setOpacity(0); continue; }
+
+          const pct = (typeof r.battery_pct === 'number')
+            ? Math.round(r.battery_pct * 100)
+            : '-';
+
+          // --- GPS state text for tooltip ---
+          let gpsText = 'GPS: unknown';
+          if (typeof r.fix_state === 'number') {
+            // if you have numeric states from backend, you can refine this:
+            // 2 = fix, 1 = stale, 0 = no fix (example)
+            if (r.fix_state === 2) gpsText = 'GPS: fix';
+            else if (r.fix_state === 1) gpsText = 'GPS: stale';
+            else if (r.fix_state === 0) gpsText = 'GPS: no fix';
+          } else if (typeof r.has_fix === 'boolean') {
+            gpsText = r.has_fix ? 'GPS: fix' : 'GPS: no fix';
+          }
+
+          const label = [
+            r.robot_name || key,
+            r.ns ? `ns: ${r.ns}` : null,
+            r.mode_text ? `mode: ${r.mode_text}` : null,
+            pct !== '-' ? `battery: ${pct}%` : null,
+            (r.map_name || r.floor_name) ? `map: ${r.map_name || ''}/${r.floor_name || ''}` : null,
+            gpsText
+          ].filter(Boolean).join('\n');
+
+          if (!hasPos) {
+            if (m) m.setOpacity(0);
+            continue;
+          }
+
           const pt = [r.lat, r.lon];
-          const icon = makeRobotIcon(r.has_fix ? '#ef4444' : '#000000', r.heading_deg || 0, !r.has_fix);
-          if(!m){
+          const icon = makeRobotIcon(
+            r.has_fix ? '#ef4444' : '#000000',  // keep your existing color logic
+            r.heading_deg || 0,
+            !r.has_fix
+          );
+
+          if (!m) {
             m = L.marker(pt, { icon });
             m.addTo(map);
-            m.bindTooltip(label, { permanent:false, direction:'top', className:'robot-label' });
+            m.bindTooltip(label, {
+              permanent: false,
+              direction: 'top',
+              className: 'robot-label'
+            });
             markers.set(key, m);
-          }else{
+          } else {
             m.setLatLng(pt);
             m.setIcon(icon);
-            const tt = m.getTooltip(); if(tt) tt.setContent(label);
+            const tt = m.getTooltip();
+            if (tt) tt.setContent(label);
           }
           m.setOpacity(1);
         }
-        for(const [k,m] of markers.entries()){
-          if(!seen.has(k)) m.setOpacity(0);
+
+        for (const [k, m] of markers.entries()) {
+          if (!seen.has(k)) m.setOpacity(0);
         }
-        document.getElementById('count').textContent = `${list.length} robot${list.length===1?'':'s'}`;
+
+        document.getElementById('count').textContent =
+          `${list.length} robot${list.length === 1 ? '' : 's'}`;
+
         updateMiniDashboard(list);
       }
+
 
       function updateMaps(data){
         lastMapsPayload = data;
@@ -1047,6 +1308,7 @@
       window.addEventListener('load', ()=>{
         createMap();
         setupCameraDomInteractions();
+        setupTeleopKeys();
         // Cameras: independent poller (parallel to UI tick)
         loadCameras();
         setInterval(loadCameras, 5000);   // every 5s; tune if needed
@@ -1069,6 +1331,27 @@
         sizeEl.addEventListener('input', updateSize);
         updateSize();
 
+        document.getElementById('btnPublishPatrol').addEventListener('click', async ()=> {
+          if (!activeNs) return alert('Select namespace');
+          if (!selectedOrder.length) return alert('Select at least one vertex');
+
+          let loops = 1;
+          if (loopsInput) {
+            const v = parseInt(loopsInput.value || '1', 10);
+            if (!isNaN(v) && v > 0) loops = v;
+          }
+
+          try {
+            await postJSON(
+              `/api/${activeNs.replace(/^\//,'')}/patrol`,
+              { sequence: selectedOrder, loops: loops }
+            );
+            showToast(`Patrol scheduled (loops: ${loops})`);
+          } catch (e) {
+            alert('Patrol failed: ' + e.message);
+          }
+        });
+
         document.getElementById('btnCenterMap').addEventListener('click', ()=>{
           const overlayBounds=[], vertexPts=[];
           for(const m of (lastGoodMaps.maps || [])){
@@ -1082,7 +1365,12 @@
           if(!centerOnMaps(overlayBounds, vertexPts)) warn('center: nothing to fit');
         });
 
-        document.getElementById('nsSelect').addEventListener('change', (e)=>{ activeNs = e.target.value || '/'; refreshCameraUI(); });
+        document.getElementById('nsSelect').addEventListener('change', (e)=>{
+          activeNs = e.target.value || '/';
+          refreshCameraUI();
+          // for safety: stop teleop when switching robot
+          teleopResetState();
+        });
 
 
         document.getElementById('btnPublishPatrol').addEventListener('click', async ()=>{

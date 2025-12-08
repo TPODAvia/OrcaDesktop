@@ -21,7 +21,7 @@ from waitress import serve
 
 from rmf_manager_msgs.msg import RobotState, MapMetadata
 from sensor_msgs.msg import Image, CompressedImage
-from geometry_msgs.msg import Quaternion
+from geometry_msgs.msg import Quaternion, Twist
 
 # Optional cv2 encoder
 try:
@@ -188,7 +188,15 @@ class MultiRobotDashboard(Node):
         else:
             self._qos_cmd = None
 
+        # Keyboard teleopt parameters
+        self._vel_pubs: Dict[str, object] = {}
+        self._vel_state: Dict[str, Dict[str, float]] = {}
 
+        self.teleop_timeout = float(self.declare_parameter("teleop_timeout_s", 0.2).get_parameter_value().double_value or 0.5)
+        self.teleop_update_hz = float(self.declare_parameter("teleop_update_hz", 10.0).get_parameter_value().double_value or 0.5)
+        self._teleop_enabled: bool = False
+
+        self._qos_vel = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE, history=HistoryPolicy.KEEP_LAST)
         # Service clients cache (per-ns, eager) — avoid shadowing Node._clients
         self._svc_clients: Dict[Tuple[str,str], object] = {}
 
@@ -196,6 +204,7 @@ class MultiRobotDashboard(Node):
         self._start_web()
         self.create_timer(1.0/max(0.1,self.discovery_hz), self._discover_ns)
         self.create_timer(1.0/max(0.1,self.viz_update_hz), self._tick_projection)
+        self.create_timer(1.0 / max(1e-3, self.teleop_update_hz), self._tick_teleop)
 
         self.get_logger().info(f"UI http://{self.ui_host}:{self.ui_port}  overlay={self.image_overlay_enable}")
 
@@ -244,6 +253,11 @@ class MultiRobotDashboard(Node):
             cmd_topic = f"{ns}/rmf/command" if ns else "/rmf/command"
             self._cmd_pubs[ns] = self.create_publisher(RobotCommand, cmd_topic, self._qos_cmd)
             self.get_logger().info(f"[discover] cmd publisher for ns='{ns or '/'}' -> {cmd_topic}")
+
+        # cmd_vel publisher for keyboard teleop
+        vel_topic = f"{ns}/cmd_vel" if ns else "/cmd_vel"
+        self._vel_pubs[ns] = self.create_publisher(Twist, vel_topic, self._qos_vel)
+        self.get_logger().info(f"[discover] cmd_vel publisher for ns='{ns or '/'}' -> {vel_topic}")
 
     # ---------- service client management ----------
     def _prime_service_clients(self, ns: str):
@@ -437,10 +451,70 @@ class MultiRobotDashboard(Node):
                 lat = float(getattr(s, "wcs_lat", float("nan")))
                 lon = float(getattr(s, "wcs_lon", float("nan")))
                 alt = float(getattr(s, "wcs_alt", float("nan")))
-                q = getattr(s, "wcs_orientation_enu", Quaternion())
+                q = getattr(s, "wcs_orientation_enuteleop_timeout_s", Quaternion())
                 heading_deg = wrap_deg(90.0 - math.degrees(quat_to_yaw(q)))
                 has_fix = True
             ent.lat, ent.lon, ent.alt, ent.heading_deg, ent.has_fix = lat, lon, alt, heading_deg, has_fix
+
+    def _tick_teleop(self):
+        if not self._vel_pubs:
+            return
+
+        # teleop gate – do not publish anything if teleop is OFF
+        if not getattr(self, "_teleop_enabled", False):
+            return
+
+        # 0 < ALPHA <= 1: 1.0 = без фильтра, 0.1 = сильно сглажено
+        LPF_ALPHA = 0.25
+        VEL_EPS   = 1e-3
+
+        now = time.time()
+
+        for ns, pub in self._vel_pubs.items():
+            st = self._vel_state.get(ns)
+            if not st:
+                continue
+
+            vx_cmd = float(st.get("vx_cmd", 0.0))
+            wz_cmd = float(st.get("wz_cmd", 0.0))
+            vx_lp  = float(st.get("vx_lp", 0.0))
+            wz_lp  = float(st.get("wz_lp", 0.0))
+            last   = float(st.get("last_update", 0.0))
+            dt_cmd = now - last
+
+            # -------- Dead-man: команда устарела --------
+            # if dt_cmd > self.teleop_timeout:
+            #     # Если уже почти стоим — вообще НИЧЕГО не шлём.
+            #     if abs(vx_lp) < VEL_EPS and abs(wz_lp) < VEL_EPS:
+            #         st["vx_lp"] = 0.0
+            #         st["wz_lp"] = 0.0
+            #         st["vx_cmd"] = 0.0
+            #         st["wz_cmd"] = 0.0
+            #         continue
+
+            #     # Иначе: последний раз шли НЕ нулевые скорости → шлём ОДИН stop
+            #     msg = Twist()  # все поля по нулям
+            #     pub.publish(msg)
+
+            #     st["vx_lp"] = 0.0
+            #     st["wz_lp"] = 0.0
+            #     st["vx_cmd"] = 0.0
+            #     st["wz_cmd"] = 0.0
+            #     # На следующем тике попадём в ветку выше и уже ничего не отправим
+            #     continue
+
+            # -------- Нормальный режим: есть свежие команды --------
+            vx_lp = vx_lp + LPF_ALPHA * (vx_cmd - vx_lp)
+            wz_lp = wz_lp + LPF_ALPHA * (wz_cmd - wz_lp)
+
+            st["vx_lp"] = vx_lp
+            st["wz_lp"] = wz_lp
+
+            msg = Twist()
+            msg.linear.x = vx_lp
+            msg.angular.z = wz_lp
+            pub.publish(msg)
+
 
     # ---------- transforms ----------
     @staticmethod
@@ -719,6 +793,91 @@ class MultiRobotDashboard(Node):
         # --------- helpers ----------
         def _nskey(ns_in: str) -> str:
             return "/" + (ns_in or "").strip("/")
+
+        # --------- REST: keyboard teleop cmd_vel ----------
+        @app.post("/api/<path:ns>/teleop_cmd")
+        def api_teleop_cmd(ns):
+            """
+            Accepts JSON with {linear_x, angular_z} and updates the current
+            teleop command for the given namespace.
+
+            Actual publishing to /cmd_vel is done from the ROS2 timer
+            (_tick_teleop) with a low-pass filter + dead-man.
+            """
+            body = request.get_json(silent=True) or {}
+            try:
+                lin_x = float(body.get("linear_x", 0.0) or 0.0)
+                ang_z = float(body.get("angular_z", 0.0) or 0.0)
+            except Exception:
+                return jsonify({"ok": False, "error": "invalid linear_x/angular_z"}), 400
+
+            ns_key = _nskey(ns)           # "/yhs_yhsros2" or "/"
+            ros_ns = "" if ns_key == "/" else ns_key
+
+            pub = self._vel_pubs.get(ros_ns)
+            if not pub:
+                return jsonify({
+                    "ok": False,
+                    "error": f"cmd_vel publisher unavailable for ns '{ros_ns or '/'}'"
+                }), 501
+
+            now = time.time()
+
+            st = self._vel_state.get(ros_ns)
+            if st is None:
+                # first command for this ns
+                st = {
+                    "vx_cmd": lin_x,   # desired (unfiltered) velocity
+                    "wz_cmd": ang_z,
+                    "vx_lp": 0.0,      # filtered velocity state
+                    "wz_lp": 0.0,
+                    "last_update": now,
+                }
+                self._vel_state[ros_ns] = st
+            else:
+                st["vx_cmd"] = lin_x
+                st["wz_cmd"] = ang_z
+                st["last_update"] = now
+
+            # ⛔️ Ничего не публикуем отсюда — только обновляем состояние.
+            # Публикация идёт ТОЛЬКО из _tick_teleop() с фильтром.
+            return jsonify({"ok": True})
+
+        @app.post("/api/teleop_state")
+        def api_teleop_state():
+            """
+            Global teleop ON/OFF flag coming from the bottom-bar button.
+            When turning OFF, publish a single zero Twist for all namespaces
+            so the robots stop, and then stop publishing from _tick_teleop().
+            """
+            body = request.get_json(silent=True) or {}
+            enabled = bool(body.get("enabled", True))
+
+            self._teleop_enabled = enabled
+            self.get_logger().info(f"[teleop] global enabled={enabled}")
+
+            if not enabled:
+                # Immediately send one stop Twist on all cmd_vel topics
+                for ns, pub in self._vel_pubs.items():
+                    try:
+                        msg = Twist()  # all zeros
+                        pub.publish(msg)
+                    except Exception as e:
+                        self.get_logger().warn(
+                            f"[teleop] stop publish failed for ns='{ns or '/'}': {e}"
+                        )
+
+                # Reset internal state so dead-man timer is "cold"
+                for st in self._vel_state.values():
+                    st["vx_cmd"] = 0.0
+                    st["wz_cmd"] = 0.0
+                    st["vx_lp"]  = 0.0
+                    st["wz_lp"]  = 0.0
+                    st["last_update"] = 0.0
+
+            return jsonify({"ok": True, "enabled": enabled})
+
+
 
         # --------- REST: cameras (go2rtc) ----------
         @app.get("/api/cameras")

@@ -4,7 +4,7 @@
       domain: 1,
       namespace: "/yhs_yhsros2",
       allow: {
-        publishers: ["/yhs_yhsros2/rmf/command"],
+        publishers: ["/yhs_yhsros2/rmf/command", "/yhs_yhsros2/cmd_vel"],
         // subscribers: ["/chatter"],
         subscribers: ["/yhs_yhsros2/rmf/event", "/yhs_yhsros2/rmf/map_image/compressed", "/yhs_yhsros2/rmf/map_metadata", "/yhs_yhsros2/rmf/state"],
         service_servers: [".*"],

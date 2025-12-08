@@ -62,42 +62,42 @@ services:
         ros2 launch rmf_manager_cloud server.launch.py
     restart: "no"
 
-  influxdb:
-    image: influxdb:2.7
-    container_name: influxdb
-    network_mode: host
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_USERNAME:-admin}
-      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD:-admin12345}
-      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-orca}
-      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-rmf}
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-supersecrettoken}
-    volumes:
-      - ./influxdb/data:/var/lib/influxdb2
-      - ./influxdb/config:/etc/influxdb2
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8086/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 30s
-    restart: unless-stopped
+  # influxdb:
+  #   image: influxdb:2.7
+  #   container_name: influxdb
+  #   network_mode: host
+  #   environment:
+  #     DOCKER_INFLUXDB_INIT_MODE: setup
+  #     DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_USERNAME:-admin}
+  #     DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD:-admin12345}
+  #     DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-orca}
+  #     DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-rmf}
+  #     DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-supersecrettoken}
+  #   volumes:
+  #     - ./influxdb/data:/var/lib/influxdb2
+  #     - ./influxdb/config:/etc/influxdb2
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-sf", "http://127.0.0.1:8086/health"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 20
+  #     start_period: 30s
+  #   restart: unless-stopped
 
-  grafana:
-    image: grafana/grafana:10.4.5
-    container_name: grafana
-    network_mode: host
-    depends_on:
-      - influxdb
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - ./grafana/data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
-    restart: unless-stopped
+  # grafana:
+  #   image: grafana/grafana:10.4.5
+  #   container_name: grafana
+  #   network_mode: host
+  #   depends_on:
+  #     - influxdb
+  #   environment:
+  #     GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+  #     GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+  #     GF_USERS_ALLOW_SIGN_UP: "false"
+  #   volumes:
+  #     - ./grafana/data:/var/lib/grafana
+  #     - ./grafana/provisioning:/etc/grafana/provisioning
+  #   restart: unless-stopped
 
   go2rtc:
     image: ghcr.io/alexxit/go2rtc:latest
