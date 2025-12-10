@@ -55,6 +55,12 @@
         background:#11161f; border:1px solid #2a3240; padding:6px 8px; border-radius:8px; font-size:12px;
       }
       #opacity, #size { width:120px; }
+
+      #loopsInput {
+        width: 60px;
+        text-align: center;
+        padding-inline: 4px 6px;
+      }
       button, select, input[type="range"], input[type="number"] {
         padding:6px 10px; border-radius:8px; background:#263143; color:#e6edf3; border:1px solid #39465a; cursor:pointer;
       }
@@ -69,6 +75,52 @@
       }
       .menu .row { display:flex; gap:8px; flex-wrap:wrap; }
       .menu button { flex:1; }
+
+      .teleop-group {
+        display: flex;
+        align-items: center;
+        margin-left: 4px;
+      }
+
+      .teleop-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #263143;
+        border: 1px solid #39465a;
+        cursor: pointer;
+      }
+
+      .teleop-toggle .teleop-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #6b7280; /* серый когда OFF */
+        flex-shrink: 0;
+      }
+
+      .teleop-toggle.active .teleop-dot {
+        background: #22c55e; /* зелёный когда ON */
+      }
+
+      .teleop-text {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .teleop-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #9ca3af;
+      }
+
+      .teleop-sub {
+        font-size: 11px;
+      }
 
       /* Toast */
       #toast {
@@ -287,11 +339,15 @@
   <body>
     <div id="top">
       <span class="pill" id="status">loading…</span>
-      <span class="pill">zoom: wheel • pan: drag</span>
       <span class="pill" id="count">0 robots</span>
       <span class="pill" id="mapsInfo">maps: -</span>
       <span class="pill" id="overlayInfo">overlay: -</span>
       <span class="pill" id="selList">Selected: -</span>
+      <!-- 🔽 language selector -->
+      <select id="langSelect" class="pill">
+        <option value="en">EN</option>
+        <option value="ru">RU</option>
+      </select>
     </div>
 
 
@@ -306,11 +362,11 @@
         </span>
       </div>
       <div class="mini-row">
-        <span class="mini-label">Speed</span>
+        <span class="mini-label" data-i18n="mini.speed_label">Speed</span>
         <span class="mini-value"><span id="miniSpeed">—</span> m/s</span>
       </div>
       <div class="mini-row">
-        <span class="mini-label">Battery</span>
+        <span class="mini-label" data-i18n="mini.battery_label">Battery</span>
         <span class="mini-value">
           <span id="miniBattPct">—</span>% ·
           <span id="miniBattVolt">—</span> V
@@ -321,8 +377,13 @@
     <!-- Camera dock: 2 tiles + camera buttons for current namespace -->
     <div id="camDock" aria-label="Robot cameras">
       <div class="cam-header">
-        <span>Cameras for <span id="camNsLabel">—</span></span>
-        <span id="camHint" style="font-size:11px;">click button → tile, click tile → zoom</span>
+        <span>
+          <span data-i18n="cam.header_prefix">Cameras for</span>
+          <span id="camNsLabel">—</span>
+        </span>
+        <span id="camHint" style="font-size:11px;" data-i18n="cam.hint">
+          click button → tile, click tile → zoom
+        </span>
       </div>
       <div id="camButtons"></div>
       <div id="camSlots">
@@ -357,29 +418,48 @@
     </div>
 
     <div id="bar">
-      <label>ns <select id="nsSelect"></select></label>
       <label>
-        loops
-        <input id="loopsInput" type="number" min="1" max="99" step="1" value="1" style="width:3.2rem; margin-left:4px;" />
+        <span data-i18n="bottom.ns">ns</span>
+        <select id="nsSelect"></select>
+      </label>
+      <label>
+        <span data-i18n="bottom.loops">loops</span>
+        <input
+          id="loopsInput"
+          type="number"
+          min="1"
+          step="1"
+          value="1"
+        />
       </label>
 
-      <button id="btnPublishPatrol" type="button">Publish patrol</button>
-      <button id="btnClearSel" type="button">Clear</button>
-      <button id="btnCancelAll" type="button">Cancel all</button>
-      <button id="btnReturnHome" type="button">Return home</button>
+      <button id="btnPublishPatrol" type="button" data-i18n="bottom.publish_patrol">
+        Publish patrol
+      </button>
+      <button id="btnClearSel" type="button" data-i18n="bottom.clear">Clear</button>
+      <button id="btnCancelAll" type="button" data-i18n="bottom.cancel_all">Cancel all</button>
+      <button id="btnReturnHome" type="button" data-i18n="bottom.return_home">Return home</button>
 
-      <span class="badge">overlay α</span>
+      <span class="badge" data-i18n="bottom.overlay_alpha">overlay α</span>
+
       <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.5"/>
 
       <span class="badge">size</span>
       <input id="size" type="range" min="0.6" max="2.5" step="0.1" value="1.4"/>
       <span id="sizeVal" class="pill">x1.4</span>
 
-      <button id="btnCenterMap" type="button">Center</button>
+      <button id="btnCenterMap" type="button" data-i18n="bottom.center">Center</button>
 
-      <span class="badge">teleop</span>
-      <button id="btnTeleopToggle" type="button">teleop OFF (Space)</button>
-      <span class="pill" id="teleopStatus">teleop: DISABLED (Space)</span>
+      <div class="teleop-group">
+        <button id="btnTeleopToggle" type="button" class="teleop-toggle">
+          <span class="teleop-dot"></span>
+          <div class="teleop-text">
+            <div class="teleop-title" data-i18n="teleop.label">Teleop</div>
+            <div class="teleop-sub" id="teleopStatus">teleop: DISABLED (Space)</div>
+          </div>
+        </button>
+      </div>
+
     </div>
 
     <div id="toast"></div>
@@ -388,12 +468,150 @@
     <div id="vmenu" class="menu" role="dialog" aria-modal="false">
       <div class="title" id="vmenuTitle" style="font-weight:700; margin-bottom:6px;">Vertex</div>
       <div class="row">
-        <button id="actAddToPatrol">Add to patrol</button>
-        <button id="actRemoveFromPatrol">Remove from patrol</button>
+        <button
+          id="actAddToPatrol"
+          data-i18n="vmenu.add_to_patrol"
+          type="button"
+        >
+          Add to patrol
+        </button>
+        <button
+          id="actRemoveFromPatrol"
+          data-i18n="vmenu.remove_from_patrol"
+          type="button"
+        >
+          Remove from patrol
+        </button>
       </div>
     </div>
 
     <script>
+
+      // ----- i18n -----
+      const I18N = {
+        en: {
+          'top.status_loading': 'loading…',
+          'top.status_ok': 'ok',
+          'top.status_degraded': 'degraded',
+          'top.zoom_hint': 'zoom: wheel • pan: drag',
+          'top.robot_count': 'robots',
+          'top.maps': 'maps',
+          'top.overlay': 'overlay',
+          'top.selected_prefix': 'Selected',
+
+          'bottom.ns': 'ns',
+          'bottom.loops': 'loops',
+          'bottom.publish_patrol': 'Publish patrol',
+          'bottom.clear': 'Clear',
+          'bottom.cancel_all': 'Cancel all',
+          'bottom.return_home': 'Return home',
+          'bottom.overlay_alpha': 'overlay α',
+          'bottom.size': 'size',
+          'bottom.center': 'Center',
+
+          'teleop.btn_on': 'teleop ON (Space)',
+          'teleop.btn_off': 'teleop OFF (Space)',
+          'teleop.status_disabled': 'teleop: DISABLED (Space)',
+          'teleop.status_idle': 'teleop: idle (WASD, Space=off)',
+          'teleop.status_active': 'teleop: ACTIVE (WASD, Space=off)',
+          'teleop.label': 'Teleop',
+
+          'cam.header_prefix': 'Cameras for',
+          'cam.hint': 'click button → tile, click tile → zoom',
+          'cam.empty': 'Empty',
+          'cam.no_cameras': 'No cameras configured',
+          'vmenu.add_to_patrol': 'Add to patrol',
+          'vmenu.remove_from_patrol': 'Remove from patrol',
+          'toast.select_ns_for_teleop': 'Select namespace for teleop',
+
+          'mini.speed_label': 'Speed',
+          'mini.battery_label': 'Battery',
+          'mode.prefix': 'mode',
+          'mode.idle': 'idle',
+          'mode.moving': 'moving',
+          'mode.charging': 'charging',
+          'mode.error': 'error',
+        },
+
+        ru: {
+          'top.status_loading': 'загрузка…',
+          'top.status_ok': 'ок',
+          'top.status_degraded': 'ограничено',
+          'top.zoom_hint': 'масштаб: колесо • панорама: перетаскивание',
+          'top.robot_count': 'роботы',
+          'top.maps': 'карты',
+          'top.overlay': 'оверлей',
+          'top.selected_prefix': 'Выбрано',
+
+          'bottom.ns': 'ns',
+          'bottom.loops': 'циклы',
+          'bottom.publish_patrol': 'Запустить патруль',
+          'bottom.clear': 'Очистить',
+          'bottom.cancel_all': 'Отменить все',
+          'bottom.return_home': 'Вернуться домой',
+          'bottom.overlay_alpha': 'оверлей α',
+          'bottom.size': 'размер',
+          'bottom.center': 'Центрировать',
+
+          'teleop.btn_on': 'телеправление ВКЛ (Пробел)',
+          'teleop.btn_off': 'телеправление ВЫКЛ (Пробел)',
+          'teleop.status_disabled': 'телеправление: ВЫКЛ (Пробел)',
+          'teleop.status_idle': 'телеправление: ожидание (WASD, Пробел=выкл)',
+          'teleop.status_active': 'телеправление: АКТИВНО (WASD, Пробел=выкл)',
+          'teleop.label': 'Телеправление',
+
+          'cam.header_prefix': 'Камеры для',
+          'cam.hint': 'кнопка → плитка, плитка → зум',
+          'cam.empty': 'Пусто',
+          'cam.no_cameras': 'Камеры не сконфигурированы',
+          'vmenu.add_to_patrol': 'Добавить в патруль',
+          'vmenu.remove_from_patrol': 'Убрать из патруля',
+
+          'toast.select_ns_for_teleop': 'Выберите namespace для телеправления',
+          'toast.select_ns_for_teleоп': 'Выберите namespace для телеправления',
+          'mini.speed_label': 'Скорость',
+          'mini.battery_label': 'Батарея',
+          'mode.prefix': 'режим',
+          'mode.idle': 'ожидание',
+          'mode.moving': 'движение',
+          'mode.charging': 'зарядка',
+          'mode.error': 'ошибка',
+        },
+      };
+
+      let currentLang = localStorage.getItem('ui_lang') || 'en';
+
+      function t(key) {
+        const table = I18N[currentLang] || I18N.en || {};
+        return table[key] || (I18N.en && I18N.en[key]) || key;
+      }
+
+      // apply translations to all static elements with data-i18n="KEY"
+      function applyStaticI18n() {
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+          const key = el.dataset.i18n;
+          const txt = t(key);
+          if (txt) el.textContent = txt;
+        });
+      }
+
+      function initI18n() {
+        const sel = document.getElementById('langSelect');
+        if (sel) {
+          sel.value = currentLang;
+          sel.addEventListener('change', () => {
+            currentLang = sel.value || 'en';
+            localStorage.setItem('ui_lang', currentLang);
+            applyStaticI18n();
+            updateTeleopTextsForLang();
+            refreshCameraUI();    // camera header/hint texts
+            // force re-render of some dynamic labels
+            updateSelectionUI();
+          });
+        }
+        applyStaticI18n();
+      }
+
       const DEBUG = true;
       function log(...a){ if(DEBUG) console.log('[UI]', ...a); }
       function warn(...a){ if(DEBUG) console.warn('[UI]', ...a); }
@@ -476,6 +694,25 @@
         }
       }
 
+      function updateTeleopTextsForLang() {
+        const btn = document.getElementById('btnTeleopToggle');
+        const statusEl = document.getElementById('teleopStatus');
+
+        if (btn) {
+          btn.textContent = teleopEnabled ? t('teleop.btn_on') : t('teleop.btn_off');
+        }
+
+        if (statusEl) {
+          if (!teleopEnabled) {
+            statusEl.textContent = t('teleop.status_disabled');
+          } else {
+            // when enabled we will refine in teleopUpdateLoop()
+            statusEl.textContent = t('teleop.status_idle');
+          }
+        }
+      }
+
+
       function teleopUpdateLoop(){
         const any = teleopState.up || teleopState.down || teleopState.left || teleopState.right;
         const statusEl = document.getElementById('teleopStatus');
@@ -486,7 +723,7 @@
             clearInterval(teleopInterval);
             teleopInterval = null;
           }
-          if (statusEl) statusEl.textContent = 'teleop: DISABLED (Space)';
+          if (statusEl) statusEl.textContent = t('teleop.status_disabled');
           return;
         }
 
@@ -497,7 +734,7 @@
             teleopSendOnce();
             teleopInterval = setInterval(teleopSendOnce, 1000 / TELEOP_HZ);
           }
-          if (statusEl) statusEl.textContent = 'teleop: ACTIVE (WASD, Space=off)';
+          if (statusEl) statusEl.textContent = t('teleop.status_active');
         } else {
           if (teleopInterval) {
             clearInterval(teleopInterval);
@@ -505,25 +742,21 @@
           }
           // while enabled, send a single (0,0) when keys are released
           teleopSendOnce();
-          if (statusEl) statusEl.textContent = 'teleop: idle (WASD, Space=off)';
+          if (statusEl) statusEl.textContent = t('teleop.status_idle');
         }
       }
 
 
       function setTeleopEnabled(on){
-        const wasEnabled = teleopEnabled;
         teleopEnabled = !!on;
 
         const btn = document.getElementById('btnTeleopToggle');
-        const statusEl = document.getElementById('teleopStatus');
-
         if (btn) {
-          btn.textContent = teleopEnabled ? 'teleop ON (Space)' : 'teleop OFF (Space)';
           btn.classList.toggle('active', teleopEnabled);
         }
 
+        // Turning OFF: stop local loop and clear key state.
         if (!teleopEnabled) {
-          // Turning OFF: stop local loop and clear key state.
           if (teleopInterval) {
             clearInterval(teleopInterval);
             teleopInterval = null;
@@ -531,10 +764,6 @@
           for (const k of ['up', 'down', 'left', 'right']) {
             teleopState[k] = false;
           }
-          if (statusEl) statusEl.textContent = 'teleop: DISABLED (Space)';
-        } else {
-          // Turning ON: idle until you press WASD.
-          if (statusEl) statusEl.textContent = 'teleop: idle (WASD, Space=off)';
         }
 
         // Tell the backend that teleop is globally enabled/disabled.
@@ -543,6 +772,9 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: teleopEnabled })
         }).catch(e => warn('teleop_state update failed', e));
+
+        // sync button & base status text with current language/state
+        updateTeleopTextsForLang();
       }
 
 
@@ -589,7 +821,7 @@
           ev.preventDefault();
 
           if (!activeNs) {
-            showToast('Select namespace for teleop');
+            showToast(t('toast.select_ns_for_teleop'));
             return;
           }
 
@@ -712,7 +944,7 @@
             const span = document.createElement('span');
             span.style.fontSize = '11px';
             span.style.color = '#6b7280';
-            span.textContent = 'No cameras configured';
+            span.textContent = t('cam.no_cameras');
             btnWrap.appendChild(span);
           }else{
             cams.forEach((c, idx)=>{
@@ -791,7 +1023,7 @@
               frame.src = blank;
               frame.dataset.currentSrc = blank;
             }
-            title.textContent = 'Empty';
+            title.textContent = t('cam.empty');
             closeBtn.style.visibility = 'hidden';
           }else{
             const newUrl = go2rtcUrlForStream(s.stream);
@@ -880,6 +1112,18 @@
       const vmenuTitle = document.getElementById('vmenuTitle');
       let vmenuFor = null; // {ns, name, lat, lon}
 
+      // Map raw mode text from backend → localized label
+      function translateModeText(raw) {
+        if (!raw) return '';
+        const m = raw.trim().toLowerCase();
+        if (m === 'idle') return t('mode.idle');
+        if (m === 'moving') return t('mode.moving');
+        if (m === 'charging') return t('mode.charging');
+        if (m === 'error' || m === 'fault' || m === 'alarm') return t('mode.error');
+        // fallback: show as is if we don't know the word
+        return raw;
+      }
+
       function createMap(){
         if(!window.L){ err('Leaflet missing'); return; }
         map = L.map('map', {
@@ -944,8 +1188,9 @@
       }
 
       function updateSelectionUI(){
+        const prefix = t('top.selected_prefix');
         document.getElementById('selList').textContent =
-          'Selected: ' + (selectedOrder.length ? selectedOrder.join(' → ') : '-');
+          `${prefix}: ` + (selectedOrder.length ? selectedOrder.join(' → ') : '-');
       }
 
       function setSelected(name, on){
@@ -1029,14 +1274,19 @@
         const vBatt     = Number.isFinite(vBattRaw)             ? vBattRaw : null;
 
         if (nameEl) nameEl.textContent = r.robot_name || r.ns || 'robot';
-        if (modeEl) modeEl.textContent = r.mode_text || (typeof r.mode === 'number' ? `mode ${r.mode}` : '—');
+
+        const rawMode = (r.mode_text || '').trim();
+        const displayMode = rawMode
+          ? translateModeText(rawMode)
+          : (typeof r.mode === 'number' ? `${t('mode.prefix')} ${r.mode}` : '—');
+        if (modeEl) modeEl.textContent = displayMode;
         if (speedEl) speedEl.textContent = (vSpeed !== null) ? vSpeed.toFixed(2) : '—';
         if (pctEl) pctEl.textContent = (pct !== null) ? String(pct) : '—';
         if (voltEl) voltEl.textContent = (vBatt !== null) ? vBatt.toFixed(1) : '—';
 
         // Simple color hint by mode_text
         if (modePill) {
-          const modeTxt = (r.mode_text || '').toLowerCase();
+          const modeTxt = rawMode.toLowerCase();
           let color = '#22c55e';  // default: "ok"/moving
 
           if (modeTxt.includes('idle')) {
@@ -1119,8 +1369,11 @@
           if (!seen.has(k)) m.setOpacity(0);
         }
 
-        document.getElementById('count').textContent =
-          `${list.length} robot${list.length === 1 ? '' : 's'}`;
+        const cntEl = document.getElementById('count');
+        if (cntEl) {
+          cntEl.textContent = `${t('top.robot_count')}: ${list.length}`;
+        }
+
 
         updateMiniDashboard(list);
       }
@@ -1206,9 +1459,13 @@
           if(nsSel.options.length){ activeNs = nsSel.value = nsSel.options[0].value; }
         }
 
-        document.getElementById('mapsInfo').textContent = 'maps: ' + (infoParts.join(' | ') || '-');
+        document.getElementById('mapsInfo').textContent =
+          `${t('top.maps')}: ${infoParts.join(' | ') || '-'}`;
+
         const countOverlays = [...overlayGroups.values()].filter(v => v.img).length;
-        document.getElementById('overlayInfo').textContent = `overlay: ${countOverlays}`;
+        document.getElementById('overlayInfo').textContent =
+          `${t('top.overlay')}: ${countOverlays}`;
+
 
         if(firstMapCenter){
           if(!centerOnMaps(overlayBounds, vertexPts)) log('center: no overlay/vertex bounds yet');
@@ -1302,18 +1559,35 @@
         // update path for active ns
         if(activeNs) fetchPathFor(activeNs);
 
-        setStatus((robotsOk && mapsOk) ? ('ok ' + new Date().toLocaleTimeString()) : 'degraded');
+        const ts = new Date().toLocaleTimeString();
+        const label = (robotsOk && mapsOk) ? t('top.status_ok') : t('top.status_degraded');
+        setStatus(`${label} ${ts}`);
       }
 
       window.addEventListener('load', ()=>{
         createMap();
         setupCameraDomInteractions();
         setupTeleopKeys();
+        initI18n();
         // Cameras: independent poller (parallel to UI tick)
         loadCameras();
         setInterval(loadCameras, 5000);   // every 5s; tune if needed
         // loops input for patrol
         const loopsInput = document.getElementById('loopsInput');
+        if (loopsInput) {
+          // Prevent negative loops in the UI
+          loopsInput.addEventListener('input', () => {
+            const v = parseInt(loopsInput.value, 10);
+            if (!Number.isNaN(v) && v < 1) {
+              loopsInput.value = '1';
+            }
+          });
+
+          // Ensure an initial value
+          if (!loopsInput.value) {
+            loopsInput.value = '1';
+          }
+        }
 
         // overlay alpha
         document.getElementById('opacity').addEventListener('input', (e)=>{
